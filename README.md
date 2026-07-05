@@ -19,6 +19,8 @@ Sur un nouveau PC, installer d'abord :
 
 Puis ouvrir PowerShell et lancer :
 
+Scripts utilises : [check-prereqs.ps1](scripts/check-prereqs.ps1), [install-deps.ps1](scripts/install-deps.ps1), [start-ecume.ps1](scripts/start-ecume.ps1).
+
 ```powershell
 git clone https://github.com/Toinus83/Ecume.git
 cd Ecume
@@ -38,6 +40,8 @@ Les donnees locales ne sont pas fournies avec le depot GitHub : chaque utilisate
 ## Installation
 
 Installation automatique sous Windows :
+
+Scripts utilises : [check-prereqs.ps1](scripts/check-prereqs.ps1), [install-deps.ps1](scripts/install-deps.ps1).
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\check-prereqs.ps1
@@ -84,6 +88,8 @@ Tu peux changer `OLLAMA_MODEL` pour utiliser un autre modèle local.
 
 Lancement automatique sous Windows :
 
+Script utilise : [start-ecume.ps1](scripts/start-ecume.ps1).
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\start-ecume.ps1
 ```
@@ -107,6 +113,8 @@ Ouvre ensuite `http://127.0.0.1:5173`.
 
 Pour arreter les serveurs lances par script :
 
+Script utilise : [stop-ecume.ps1](scripts/stop-ecume.ps1).
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\stop-ecume.ps1
 ```
@@ -116,6 +124,8 @@ powershell -ExecutionPolicy Bypass -File scripts\stop-ecume.ps1
 Le guide de publication et de recuperation sur un autre PC est dans `docs/publication_git.md`.
 
 Pour publier vers le depot GitHub configure :
+
+Script utilise : [publish-github.ps1](scripts/publish-github.ps1).
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\publish-github.ps1
