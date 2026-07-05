@@ -1,0 +1,36 @@
+# Environnements locaux
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Données utilisateur et exports locaux
+data/
+data/uploads/
+data/exports/
+data/ecume.db
+data/*.db
+*.sqlite
+*.sqlite3
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/dev.log
+frontend/dev.err
+npm-debug.log*
+
+# Système / éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
