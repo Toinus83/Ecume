@@ -8,6 +8,33 @@ ECUME est un MVP local de capitalisation de connaissance métier sur la couche u
 - Node.js 16+
 - Ollama lancé localement si tu veux l'analyse LLM automatique
 
+## Recuperer le projet depuis GitHub
+
+Sur un nouveau PC, installer d'abord :
+
+- Git for Windows : https://git-scm.com/download/win
+- Python 3.11+
+- Node.js LTS
+- Ollama si l'analyse LLM locale est souhaitee
+
+Puis ouvrir PowerShell et lancer :
+
+```powershell
+git clone https://github.com/Toinus83/Ecume.git
+cd Ecume
+powershell -ExecutionPolicy Bypass -File scripts\check-prereqs.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install-deps.ps1
+powershell -ExecutionPolicy Bypass -File scripts\start-ecume.ps1
+```
+
+L'application sera disponible ici :
+
+```text
+http://127.0.0.1:5173
+```
+
+Les donnees locales ne sont pas fournies avec le depot GitHub : chaque utilisateur aura sa propre base SQLite, ses propres imports et ses propres exports dans `data/`.
+
 ## Installation
 
 Installation automatique sous Windows :
