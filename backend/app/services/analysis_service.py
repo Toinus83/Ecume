@@ -10,6 +10,7 @@ from app.llm.api import ApiLLMProvider
 from app.llm.heuristic import HeuristicProvider
 from app.llm.ollama import OllamaProvider
 from app.models.schemas import KnowledgeEdgeIn, KnowledgeNodeIn, ManualCardRequest
+from app.semantic.archimate_mapping import normalize_archimate_mapping, normalize_business_category
 from app.services.changelog_service import record_change
 from app.services import graph_service
 from app.services.document_service import get_document
@@ -36,6 +37,22 @@ def _confidence(value: str | None) -> str:
 
 def _level(value: str | None) -> str:
     return value if value in {"strategic", "operational", "tactical", "operator", "unknown"} else "unknown"
+
+
+def _mapping_status(value: str | None) -> str:
+    allowed = {
+        "proposed_by_llm",
+        "inferred_from_user_answer",
+        "validated_by_user",
+        "corrected_by_user",
+        "validated_by_architect",
+        "rejected",
+        "to_review",
+        "candidate",
+        "unmapped",
+        "to_map_later",
+    }
+    return value if value in allowed else "proposed_by_llm"
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -199,6 +216,22 @@ def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str]) -
         "confidence": _confidence(main_effect.get("confidence")),
     }
     level = _level(raw_card.get("level") or main_effect["level"])
+    business_category = normalize_business_category(
+        raw_card.get("business_category"),
+        fallback="resultat_recherche",
+    )
+    business_justification = str(
+        raw_card.get("business_justification")
+        or raw_card.get("justification")
+        or "Categorie metier proposee automatiquement par ECUME."
+    ).strip()
+    archimate_mapping = normalize_archimate_mapping(
+        raw_card.get("archimate_mapping"),
+        business_category=business_category,
+        concept_label=main_effect["label"],
+        document_type=document.get("file_type", ""),
+        default_status="proposed_by_llm",
+    )
     payload = {
         "id": card_id,
         "document_id": document["id"],
@@ -214,6 +247,14 @@ def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str]) -
         "confidence": _confidence(raw_card.get("confidence") or main_effect["confidence"]),
         "status": "proposed",
         "validation_status": "proposed",
+        "business_category": business_category,
+        "business_validation_status": "proposed",
+        "business_justification": business_justification,
+        "archimate_mapping": archimate_mapping,
+        "archimate_mapping_status": _mapping_status(
+            str(raw_card.get("archimate_mapping_status") or archimate_mapping.get("status"))
+        ),
+        "ontology_mapping_status": "to_map_later",
         "source_excerpt": str(raw_card.get("source_excerpt") or document["content_text"][:700]),
         "warnings": warnings,
         "graph_node_ids": {},
@@ -227,8 +268,10 @@ def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str]) -
             INSERT INTO extracted_cards
             (id, document_id, theme_label, main_effect, level, objects, actions, conditions,
              tasks, secondary_effects, suggested_links, confidence, status, validation_status,
+             business_category, business_validation_status, business_justification,
+             archimate_mapping, archimate_mapping_status, ontology_mapping_status,
              source_excerpt, warnings, graph_node_ids, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload["id"],
@@ -245,6 +288,12 @@ def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str]) -
                 payload["confidence"],
                 payload["status"],
                 payload["validation_status"],
+                payload["business_category"],
+                payload["business_validation_status"],
+                payload["business_justification"],
+                json.dumps(payload["archimate_mapping"], ensure_ascii=False),
+                payload["archimate_mapping_status"],
+                payload["ontology_mapping_status"],
                 payload["source_excerpt"],
                 json.dumps(payload["warnings"], ensure_ascii=False),
                 json.dumps(payload["graph_node_ids"], ensure_ascii=False),
@@ -272,6 +321,8 @@ def create_manual_card(request: ManualCardRequest) -> dict:
         "suggested_links": [],
         "source_excerpt": request.source_excerpt,
         "confidence": request.main_effect.confidence,
+        "business_category": "resultat_recherche",
+        "business_justification": "Carte creee manuellement, categorie par defaut a corriger si besoin.",
     }
     card = _store_card(document, raw_card, ["Carte créée manuellement."])
     record_change(
@@ -321,6 +372,12 @@ def _materialize_proposed_graph(document: dict, card: dict) -> dict[str, Any]:
             status="proposed",
             confidence=card["confidence"],
             source_ids=source_ids,
+            business_category=card["business_category"],
+            business_validation_status=card["business_validation_status"],
+            business_justification=card["business_justification"],
+            archimate_mapping=card["archimate_mapping"],
+            archimate_mapping_status=card["archimate_mapping_status"],
+            ontology_mapping_status=card["ontology_mapping_status"],
             metadata={"card_id": card["id"], "source_excerpt": card["source_excerpt"], "origin": "import"},
         )
     )
@@ -335,6 +392,11 @@ def _materialize_proposed_graph(document: dict, card: dict) -> dict[str, Any]:
             status="proposed",
             confidence=card["confidence"],
             source_ids=source_ids,
+            **graph_service.default_semantic_fields_for_node(
+                node_type="theme",
+                label=card["theme_label"],
+                document_type=document.get("file_type", ""),
+            ),
             metadata={"card_id": card["id"], "origin": "import"},
         )
     )
@@ -366,6 +428,11 @@ def _materialize_proposed_graph(document: dict, card: dict) -> dict[str, Any]:
                     status="proposed",
                     confidence=card["confidence"],
                     source_ids=source_ids,
+                    **graph_service.default_semantic_fields_for_node(
+                        node_type=node_type,
+                        label=label,
+                        document_type=document.get("file_type", ""),
+                    ),
                     metadata={"card_id": card["id"], "origin": "import"},
                 )
             )

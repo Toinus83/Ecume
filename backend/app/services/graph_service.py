@@ -8,6 +8,10 @@ from typing import Any
 
 from app.database.db import get_db, now_iso
 from app.models.schemas import AliasRequest, KnowledgeEdgeIn, KnowledgeNodeIn
+from app.semantic.archimate_mapping import (
+    default_category_for_node_type,
+    infer_archimate_mapping,
+)
 from app.services.changelog_service import record_change
 from app.services.serialization import row_to_dict, rows_to_dicts
 
@@ -55,8 +59,10 @@ def create_node(node: KnowledgeNodeIn) -> dict:
             """
             INSERT INTO knowledge_nodes
             (id, label, type, description, level, status, validation_status, confidence,
-             created_at, updated_at, source_ids, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_at, updated_at, source_ids, business_category, business_validation_status,
+             business_justification, archimate_mapping, archimate_mapping_status,
+             ontology_mapping_status, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 node_id,
@@ -70,6 +76,17 @@ def create_node(node: KnowledgeNodeIn) -> dict:
                 timestamp,
                 timestamp,
                 json.dumps(node.source_ids, ensure_ascii=False),
+                node.business_category,
+                node.business_validation_status,
+                node.business_justification,
+                json.dumps(
+                    node.archimate_mapping.model_dump()
+                    if hasattr(node.archimate_mapping, "model_dump")
+                    else node.archimate_mapping,
+                    ensure_ascii=False,
+                ),
+                node.archimate_mapping_status,
+                node.ontology_mapping_status,
                 json.dumps(node.metadata, ensure_ascii=False),
             ),
         )
@@ -213,12 +230,13 @@ def update_node_status(node_ids: list[str], status: str) -> None:
     if not node_ids:
         return
     placeholders = ",".join("?" for _ in node_ids)
-    params = [status, status, now_iso(), *node_ids]
+    business_validation_status = _business_validation_from_card_status(status)
+    params = [status, status, business_validation_status, now_iso(), *node_ids]
     with get_db() as conn:
         conn.execute(
             f"""
             UPDATE knowledge_nodes
-            SET status = ?, validation_status = ?, updated_at = ?
+            SET status = ?, validation_status = ?, business_validation_status = ?, updated_at = ?
             WHERE id IN ({placeholders})
             """,
             params,
@@ -231,6 +249,36 @@ def update_node_status(node_ids: list[str], status: str) -> None:
             origin="user",
             details={"status": status},
         )
+
+
+def default_semantic_fields_for_node(
+    *, node_type: str, label: str, document_type: str = "", reason: str = ""
+) -> dict[str, Any]:
+    business_category = default_category_for_node_type(node_type)
+    mapping = infer_archimate_mapping(
+        business_category=business_category,
+        concept_label=label,
+        document_type=document_type,
+        reason=reason,
+    )
+    return {
+        "business_category": business_category,
+        "business_validation_status": "proposed",
+        "business_justification": reason,
+        "archimate_mapping": mapping,
+        "archimate_mapping_status": mapping["status"],
+        "ontology_mapping_status": "to_map_later",
+    }
+
+
+def _business_validation_from_card_status(status: str) -> str:
+    if status in {"accepted", "accepted_orphan"}:
+        return "validated_by_user"
+    if status == "rejected":
+        return "rejected"
+    if status == "to_confirm":
+        return "to_review"
+    return "proposed"
 
 
 def update_card_edges_status(card_id: str, status: str) -> None:

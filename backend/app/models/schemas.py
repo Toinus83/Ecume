@@ -8,7 +8,42 @@ from pydantic import BaseModel, Field
 NodeType = Literal["effect", "object", "action", "condition", "task", "theme"]
 Level = Literal["strategic", "operational", "tactical", "operator", "unknown"]
 Confidence = Literal["low", "medium", "high"]
-Status = Literal["proposed", "accepted", "accepted_orphan", "linked", "to_confirm"]
+Status = Literal["proposed", "accepted", "accepted_orphan", "linked", "to_confirm", "rejected"]
+BusinessCategory = Literal[
+    "resultat_recherche",
+    "objectif_haut_niveau",
+    "capacite_a_obtenir",
+    "action_activite",
+    "chose_metier",
+    "donnee_manipulee",
+    "condition_regle_contrainte",
+    "tache_concrete",
+    "acteur_organisation",
+    "role_tenu",
+    "service_rendu",
+    "service_applicatif",
+    "element_technique",
+    "non_qualifie",
+]
+BusinessValidationStatus = Literal[
+    "proposed",
+    "validated_by_user",
+    "corrected_by_user",
+    "to_review",
+    "rejected",
+]
+MappingStatus = Literal[
+    "proposed_by_llm",
+    "inferred_from_user_answer",
+    "validated_by_user",
+    "corrected_by_user",
+    "validated_by_architect",
+    "rejected",
+    "to_review",
+    "candidate",
+    "unmapped",
+    "to_map_later",
+]
 RelationType = Literal[
     "contribue à",
     "se décompose en",
@@ -46,6 +81,16 @@ class MainEffect(BaseModel):
     confidence: Confidence = "medium"
 
 
+class ArchimateMapping(BaseModel):
+    framework: str = "ArchiMate"
+    version: str = "3.2"
+    candidate_layer: str = "Unknown"
+    candidate_element: str = "Unknown"
+    confidence: float = 0.3
+    reason: str = ""
+    status: MappingStatus = "inferred_from_user_answer"
+
+
 class ExtractedCard(BaseModel):
     id: str
     document_id: str
@@ -61,6 +106,12 @@ class ExtractedCard(BaseModel):
     confidence: Confidence = "medium"
     status: Status = "proposed"
     validation_status: Status = "proposed"
+    business_category: BusinessCategory = "resultat_recherche"
+    business_validation_status: BusinessValidationStatus = "proposed"
+    business_justification: str = ""
+    archimate_mapping: ArchimateMapping | dict[str, Any] = Field(default_factory=ArchimateMapping)
+    archimate_mapping_status: MappingStatus = "proposed_by_llm"
+    ontology_mapping_status: MappingStatus = "to_map_later"
     source_excerpt: str = ""
     warnings: list[str] = Field(default_factory=list)
     graph_node_ids: dict[str, Any] = Field(default_factory=dict)
@@ -76,6 +127,12 @@ class KnowledgeNodeIn(BaseModel):
     status: Status = "proposed"
     confidence: Confidence = "medium"
     source_ids: list[str] = Field(default_factory=list)
+    business_category: BusinessCategory = "non_qualifie"
+    business_validation_status: BusinessValidationStatus = "proposed"
+    business_justification: str = ""
+    archimate_mapping: ArchimateMapping | dict[str, Any] = Field(default_factory=ArchimateMapping)
+    archimate_mapping_status: MappingStatus = "proposed_by_llm"
+    ontology_mapping_status: MappingStatus = "to_map_later"
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -115,6 +172,12 @@ class CardUpdate(BaseModel):
     suggested_links: list[SuggestedLink] | None = None
     status: Status | None = None
     validation_status: Status | None = None
+    business_category: BusinessCategory | None = None
+    business_validation_status: BusinessValidationStatus | None = None
+    business_justification: str | None = None
+    archimate_mapping: ArchimateMapping | dict[str, Any] | None = None
+    archimate_mapping_status: MappingStatus | None = None
+    ontology_mapping_status: MappingStatus | None = None
 
 
 class MergeCardRequest(BaseModel):

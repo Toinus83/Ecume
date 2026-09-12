@@ -149,3 +149,28 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_jobs_status ON analysis_jobs(status);
             """
         )
+        _ensure_column(conn, "extracted_cards", "business_category", "TEXT NOT NULL DEFAULT 'resultat_recherche'")
+        _ensure_column(conn, "extracted_cards", "business_validation_status", "TEXT NOT NULL DEFAULT 'proposed'")
+        _ensure_column(conn, "extracted_cards", "business_justification", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "extracted_cards", "archimate_mapping", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "extracted_cards", "archimate_mapping_status", "TEXT NOT NULL DEFAULT 'proposed_by_llm'")
+        _ensure_column(conn, "extracted_cards", "ontology_mapping_status", "TEXT NOT NULL DEFAULT 'to_map_later'")
+        _ensure_column(conn, "knowledge_nodes", "business_category", "TEXT NOT NULL DEFAULT 'non_qualifie'")
+        _ensure_column(conn, "knowledge_nodes", "business_validation_status", "TEXT NOT NULL DEFAULT 'proposed'")
+        _ensure_column(conn, "knowledge_nodes", "business_justification", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "knowledge_nodes", "archimate_mapping", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "knowledge_nodes", "archimate_mapping_status", "TEXT NOT NULL DEFAULT 'proposed_by_llm'")
+        _ensure_column(conn, "knowledge_nodes", "ontology_mapping_status", "TEXT NOT NULL DEFAULT 'to_map_later'")
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _ensure_column(
+    conn: sqlite3.Connection, table_name: str, column_name: str, column_definition: str
+) -> None:
+    if column_name in _table_columns(conn, table_name):
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")

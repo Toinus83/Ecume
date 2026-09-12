@@ -1,7 +1,38 @@
 export type Level = "strategic" | "operational" | "tactical" | "operator" | "unknown";
 export type Confidence = "low" | "medium" | "high";
-export type CardStatus = "proposed" | "accepted" | "accepted_orphan" | "linked" | "to_confirm";
+export type CardStatus = "proposed" | "accepted" | "accepted_orphan" | "linked" | "to_confirm" | "rejected";
 export type NodeType = "effect" | "object" | "action" | "condition" | "task" | "theme";
+export type BusinessCategory =
+  | "resultat_recherche"
+  | "objectif_haut_niveau"
+  | "capacite_a_obtenir"
+  | "action_activite"
+  | "chose_metier"
+  | "donnee_manipulee"
+  | "condition_regle_contrainte"
+  | "tache_concrete"
+  | "acteur_organisation"
+  | "role_tenu"
+  | "service_rendu"
+  | "service_applicatif"
+  | "element_technique"
+  | "non_qualifie";
+export type BusinessValidationStatus =
+  | "proposed"
+  | "validated_by_user"
+  | "corrected_by_user"
+  | "to_review"
+  | "rejected";
+
+export interface ArchimateMapping {
+  framework: "ArchiMate" | string;
+  version: "3.2" | string;
+  candidate_layer: string;
+  candidate_element: string;
+  confidence: number;
+  reason: string;
+  status: string;
+}
 
 export interface SourceDocument {
   id: string;
@@ -44,6 +75,12 @@ export interface ExtractedCard {
   confidence: Confidence;
   status: CardStatus;
   validation_status: CardStatus;
+  business_category: BusinessCategory;
+  business_validation_status: BusinessValidationStatus;
+  business_justification: string;
+  archimate_mapping: ArchimateMapping;
+  archimate_mapping_status: string;
+  ontology_mapping_status: string;
   source_excerpt: string;
   warnings: string[];
   graph_node_ids: Record<string, string | string[]>;
@@ -60,6 +97,12 @@ export interface KnowledgeNode {
   status: CardStatus;
   validation_status: CardStatus;
   confidence: Confidence;
+  business_category: BusinessCategory;
+  business_validation_status: BusinessValidationStatus;
+  business_justification: string;
+  archimate_mapping: ArchimateMapping;
+  archimate_mapping_status: string;
+  ontology_mapping_status: string;
   created_at: string;
   updated_at: string;
   source_ids: string[];

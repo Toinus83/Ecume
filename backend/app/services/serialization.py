@@ -17,6 +17,7 @@ JSON_FIELDS = {
     "suggested_links",
     "warnings",
     "graph_node_ids",
+    "archimate_mapping",
     "details",
     "result_card_ids",
 }

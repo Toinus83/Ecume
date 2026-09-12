@@ -24,7 +24,7 @@ export default function CardsPage({ refreshKey, onOpenGraph }: Props) {
       .catch((err) => setError(err instanceof Error ? err.message : "Chargement impossible"));
   }, [refreshKey, localRefresh]);
 
-  const workCards = cards.filter((card) => !["accepted", "accepted_orphan"].includes(card.status));
+  const workCards = cards.filter((card) => !["accepted", "accepted_orphan", "rejected", "linked"].includes(card.status));
   const filteredCards = workCards.filter((card) => {
     const needle = query.trim().toLowerCase();
     if (!needle) return true;
@@ -32,6 +32,8 @@ export default function CardsPage({ refreshKey, onOpenGraph }: Props) {
       card.theme_label,
       card.main_effect.label,
       card.main_effect.description,
+      card.business_category,
+      card.business_justification,
       ...card.objects,
       ...card.actions,
       ...card.conditions,

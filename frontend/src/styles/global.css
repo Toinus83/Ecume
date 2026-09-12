@@ -228,6 +228,25 @@ input, select, textarea {
 .theme { color: #0f766e; margin-bottom: 5px; font-weight: 700; }
 .effect-card h2 { max-width: 900px; line-height: 1.25; }
 .description { color: #475569; }
+.business-summary {
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #cfe3dc;
+  border-radius: 7px;
+  background: #f4fbf8;
+}
+.business-summary span {
+  display: inline-flex;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.business-summary p {
+  margin: 5px 0 0;
+  color: #334155;
+  font-size: 14px;
+}
 .pill-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 180px; }
 .pill {
   display: inline-flex;
@@ -280,6 +299,24 @@ input, select, textarea {
 }
 .suggestions span { color: #9a3412; font-size: 12px; font-weight: 700; }
 .suggestions p { margin: 6px 0 0; font-size: 13px; }
+.advanced-panel {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px dashed #bfd0e4;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+.advanced-panel span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.advanced-panel p {
+  margin: 6px 0 0;
+  color: #475569;
+  font-size: 13px;
+}
 .source-panel {
   white-space: pre-wrap;
   max-height: 210px;

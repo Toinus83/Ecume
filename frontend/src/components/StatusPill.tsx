@@ -1,19 +1,20 @@
 import type { CardStatus, Confidence, Level } from "../types";
 
 const statusLabels: Record<CardStatus, string> = {
-  proposed: "proposé",
-  accepted: "validé",
-  accepted_orphan: "orphelin accepté",
-  linked: "rattaché",
-  to_confirm: "à confirmer"
+  proposed: "propose",
+  accepted: "valide",
+  accepted_orphan: "orphelin accepte",
+  linked: "rattache",
+  to_confirm: "a confirmer",
+  rejected: "rejete"
 };
 
 const levelLabels: Record<Level, string> = {
-  strategic: "stratégique",
-  operational: "opératif",
+  strategic: "strategique",
+  operational: "operatif",
   tactical: "tactique",
-  operator: "opérateur",
-  unknown: "à qualifier"
+  operator: "operateur",
+  unknown: "a qualifier"
 };
 
 const confidenceLabels: Record<Confidence, string> = {

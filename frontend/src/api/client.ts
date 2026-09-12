@@ -70,6 +70,6 @@ export const api = {
       "/admin/database/reset",
       { method: "POST", body: JSON.stringify(payload) }
     ),
-  exportUrl: (kind: "json" | "jsonld" | "csv" | "memgraph" | "rdf-skos") =>
+  exportUrl: (kind: "json" | "jsonld" | "csv" | "memgraph" | "rdf-skos" | "archimate-json") =>
     `${API_BASE}/export/${kind}`
 };

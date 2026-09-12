@@ -263,3 +263,11 @@ def export_rdf_skos() -> FileResponse:
     return FileResponse(
         export_service.export_rdf_skos_skeleton(), filename="ecume_skos_skeleton.ttl"
     )
+
+
+@app.get("/export/archimate-json")
+def export_archimate_json() -> FileResponse:
+    return FileResponse(
+        export_service.export_archimate_candidates_json(),
+        filename="ecume_archimate_candidates.json",
+    )

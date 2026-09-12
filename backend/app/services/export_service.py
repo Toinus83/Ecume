@@ -45,6 +45,12 @@ def export_jsonld() -> Path:
             "level": "ecume:level",
             "status": "ecume:status",
             "confidence": "ecume:confidence",
+            "businessCategory": "ecume:businessCategory",
+            "businessValidationStatus": "ecume:businessValidationStatus",
+            "businessJustification": "ecume:businessJustification",
+            "archimateMapping": "ecume:archimateMapping",
+            "archimateMappingStatus": "ecume:archimateMappingStatus",
+            "ontologyMappingStatus": "ecume:ontologyMappingStatus",
             "sourceDocuments": {"@id": "ecume:sourceDocuments", "@type": "@id"},
             "source": {"@id": "ecume:source", "@type": "@id"},
             "target": {"@id": "ecume:target", "@type": "@id"},
@@ -78,6 +84,12 @@ def export_jsonld() -> Path:
             "level": node["level"],
             "status": node["status"],
             "confidence": node["confidence"],
+            "businessCategory": node.get("business_category", "non_qualifie"),
+            "businessValidationStatus": node.get("business_validation_status", "proposed"),
+            "businessJustification": node.get("business_justification", ""),
+            "archimateMapping": node.get("archimate_mapping", {}),
+            "archimateMappingStatus": node.get("archimate_mapping_status", ""),
+            "ontologyMappingStatus": node.get("ontology_mapping_status", ""),
             "sourceDocuments": [
                 f"urn:ecume:document:{source_id}" for source_id in node["source_ids"]
             ],
@@ -183,6 +195,52 @@ def export_rdf_skos_skeleton() -> Path:
     return path
 
 
+def export_archimate_candidates_json() -> Path:
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    path = EXPORT_DIR / "ecume_archimate_candidates.json"
+    payload = _complete_export_payload()
+    candidates = []
+    for node in payload["nodes"]:
+        mapping = node.get("archimate_mapping") or {}
+        if mapping.get("status") == "rejected":
+            continue
+        candidates.append(
+            {
+                "ecume_node_id": node["id"],
+                "ecume_uri": node["uri"],
+                "label": node["label"],
+                "description": node["description"],
+                "business_category": node.get("business_category", "non_qualifie"),
+                "business_validation_status": node.get("business_validation_status", "proposed"),
+                "level": node["level"],
+                "status": node["status"],
+                "confidence": node["confidence"],
+                "source_ids": node.get("source_ids", []),
+                "source_titles": node.get("source_titles", []),
+                "archimate_mapping": mapping,
+                "ontology_mapping_status": node.get("ontology_mapping_status", "to_map_later"),
+                "export_decision": {
+                    "selected_for_archimate_export": mapping.get("confidence", 0) >= 0.7
+                    and node.get("business_validation_status") == "validated_by_user",
+                    "reason": "Selection automatique prudente : concept valide metier et mapping candidat >= 0.70.",
+                },
+            }
+        )
+    export_payload = {
+        "export_metadata": {
+            "format": "ECUME ArchiMate candidate import batch",
+            "version": "0.1.0",
+            "generated_at": now_iso(),
+            "target_standard": "ArchiMate 3.2",
+            "exchange_xml_status": "not_generated_in_this_iteration",
+            "note": "JSON intermediaire prudent avant generation eventuelle du format ArchiMate Model Exchange XML.",
+        },
+        "candidates": candidates,
+    }
+    path.write_text(json.dumps(export_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
 def _complete_export_payload() -> dict:
     documents = _list_documents()
     cards = _list_cards()
@@ -211,6 +269,7 @@ def _complete_export_payload() -> dict:
                 "edge": "urn:ecume:edge:{id}",
                 "document": "urn:ecume:document:{id}",
                 "card": "urn:ecume:card:{id}",
+                "ontology": "urn:ecume:ontology:{id}",
             },
             "mapping_notes": {
                 "mbse_uaf": "Prepared as a simple effect/object/action/condition/task graph. Formal UAF mapping is intentionally not asserted in the MVP.",
@@ -232,6 +291,22 @@ def _complete_export_payload() -> dict:
                 "condition": "Condition d'application ou de déclenchement.",
                 "task": "Tâche concrète à réaliser.",
                 "theme": "Thème détecté dans une source.",
+            },
+            "business_categories": {
+                "resultat_recherche": "Ce que l'on cherche a obtenir.",
+                "objectif_haut_niveau": "Finalite generale a atteindre.",
+                "capacite_a_obtenir": "Ce que l'organisation doit etre capable de faire.",
+                "action_activite": "Ce qui est fait pour contribuer a un resultat.",
+                "chose_metier": "Element metier dont on parle ou sur lequel on agit.",
+                "donnee_manipulee": "Information utilisee, produite ou echangee.",
+                "condition_regle_contrainte": "Situation, critere ou regle d'application.",
+                "tache_concrete": "Action realisee concretement.",
+                "acteur_organisation": "Personne, unite, organisme ou systeme responsable.",
+                "role_tenu": "Fonction assumee dans un contexte.",
+                "service_rendu": "Capacite fournie a un utilisateur ou a un metier.",
+                "service_applicatif": "Service fourni par une application.",
+                "element_technique": "Element technique utile au fonctionnement.",
+                "non_qualifie": "Categorie encore incertaine.",
             },
         },
     }
@@ -364,6 +439,12 @@ def _write_nodes(path: Path, nodes: list[dict]) -> None:
         "canonical_label",
         "aliases",
         "type",
+        "business_category",
+        "business_validation_status",
+        "business_justification",
+        "archimate_mapping",
+        "archimate_mapping_status",
+        "ontology_mapping_status",
         "level",
         "description",
         "status",
@@ -427,6 +508,12 @@ def _write_cards(path: Path, cards: list[dict]) -> None:
         "theme_label",
         "main_effect",
         "level",
+        "business_category",
+        "business_validation_status",
+        "business_justification",
+        "archimate_mapping",
+        "archimate_mapping_status",
+        "ontology_mapping_status",
         "objects",
         "actions",
         "conditions",
@@ -469,6 +556,12 @@ SET n.label = row.label,
     n.canonical_label = row.canonical_label,
     n.aliases = row.aliases,
     n.type = row.type,
+    n.business_category = row.business_category,
+    n.business_validation_status = row.business_validation_status,
+    n.business_justification = row.business_justification,
+    n.archimate_mapping = row.archimate_mapping,
+    n.archimate_mapping_status = row.archimate_mapping_status,
+    n.ontology_mapping_status = row.ontology_mapping_status,
     n.level = row.level,
     n.description = row.description,
     n.status = row.status,

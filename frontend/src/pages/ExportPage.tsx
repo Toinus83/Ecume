@@ -6,7 +6,8 @@ const exports = [
   ["jsonld", "Exporter JSON-LD"],
   ["csv", "Exporter CSV"],
   ["memgraph", "Exporter Memgraph"],
-  ["rdf-skos", "Exporter RDF/SKOS"]
+  ["rdf-skos", "Exporter RDF/SKOS"],
+  ["archimate-json", "Exporter ArchiMate JSON"]
 ] as const;
 
 export default function ExportPage() {
