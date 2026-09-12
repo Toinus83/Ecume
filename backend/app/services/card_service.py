@@ -24,6 +24,11 @@ def update_card(card_id: str, update: CardUpdate) -> dict:
             status="inferred_from_user_answer",
         )
         data.setdefault("archimate_mapping_status", "inferred_from_user_answer")
+    if "archimate_mapping_status" in data and "archimate_mapping" not in data:
+        mapping = current.get("archimate_mapping") or {}
+        if isinstance(mapping, dict):
+            mapping = {**mapping, "status": data["archimate_mapping_status"]}
+            data["archimate_mapping"] = mapping
     fields = []
     params = []
     json_fields = {
@@ -50,6 +55,10 @@ def update_card(card_id: str, update: CardUpdate) -> dict:
         conn.execute(f"UPDATE extracted_cards SET {', '.join(fields)} WHERE id = ?", params)
         row = conn.execute("SELECT * FROM extracted_cards WHERE id = ?", (card_id,)).fetchone()
     updated = row_to_dict(row)
+    if "status" in data:
+        node_ids = _all_card_node_ids(updated)
+        graph_service.update_node_status(node_ids, data["status"])
+        graph_service.update_card_edges_status(card_id, data["status"])
     _sync_effect_node_semantics(updated)
     return updated
 

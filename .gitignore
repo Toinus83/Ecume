@@ -30,6 +30,10 @@ frontend/dev.log
 frontend/dev.err
 npm-debug.log*
 
+# Logs locaux
+backend/dev-backend.*.log
+*.log
+
 # Système / éditeurs
 .DS_Store
 Thumbs.db

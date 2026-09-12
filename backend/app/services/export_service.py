@@ -202,7 +202,12 @@ def export_archimate_candidates_json() -> Path:
     candidates = []
     for node in payload["nodes"]:
         mapping = node.get("archimate_mapping") or {}
-        if mapping.get("status") == "rejected":
+        if (
+            node.get("status") == "rejected"
+            or node.get("business_validation_status") == "rejected"
+            or node.get("archimate_mapping_status") == "rejected"
+            or mapping.get("status") == "rejected"
+        ):
             continue
         candidates.append(
             {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, Download, FileUp, GitFork, Layers3, Network, Settings, Sparkles } from "lucide-react";
+import { BarChart3, BookOpen, Download, FileUp, GitFork, Layers3, Network, Settings, Sparkles } from "lucide-react";
 import { api } from "./api/client";
 import Dashboard from "./pages/Dashboard";
 import ImportPage from "./pages/ImportPage";
@@ -8,9 +8,10 @@ import GraphPage from "./pages/GraphPage";
 import OrphansPage from "./pages/OrphansPage";
 import ExportPage from "./pages/ExportPage";
 import AdminPage from "./pages/AdminPage";
+import ReferencesPage from "./pages/ReferencesPage";
 import type { AnalysisJob } from "./types";
 
-type Page = "dashboard" | "import" | "cards" | "graph" | "orphans" | "exports" | "admin";
+type Page = "dashboard" | "import" | "cards" | "graph" | "orphans" | "exports" | "references" | "admin";
 
 const nav = [
   { id: "dashboard", label: "Tableau", icon: BarChart3 },
@@ -19,6 +20,7 @@ const nav = [
   { id: "graph", label: "Graphe", icon: Network },
   { id: "orphans", label: "Orphelins", icon: GitFork },
   { id: "exports", label: "Exports", icon: Download },
+  { id: "references", label: "Referentiels", icon: BookOpen },
   { id: "admin", label: "Admin", icon: Settings }
 ] as const;
 
@@ -112,6 +114,7 @@ export default function App() {
         {page === "graph" && <GraphPage refreshKey={refreshKey} />}
         {page === "orphans" && <OrphansPage refreshKey={refreshKey} />}
         {page === "exports" && <ExportPage />}
+        {page === "references" && <ReferencesPage />}
         {page === "admin" && <AdminPage refreshKey={refreshKey} onChanged={refresh} />}
       </main>
     </div>
