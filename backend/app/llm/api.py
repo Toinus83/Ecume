@@ -27,7 +27,7 @@ class ApiLLMProvider(LLMProvider):
         if not self.base_url or not self.api_key or not self.model:
             raise ValueError("Configuration API incomplète : URL, clé API et modèle sont requis.")
         prompt = build_analysis_prompt(
-            title=title, content_text=content_text, existing_nodes=existing_nodes
+            title=title, content_text=content_text, existing_nodes=existing_nodes, extraction_mode=getattr(self, "extraction_mode", "sober")
         )
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(

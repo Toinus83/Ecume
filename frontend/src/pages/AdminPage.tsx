@@ -34,7 +34,7 @@ export default function AdminPage({ refreshKey, onChanged }: Props) {
   const [deleteExports, setDeleteExports] = useState(true);
 
   useEffect(() => {
-    Promise.all([api.llmSettings(), api.graph("all")])
+    Promise.all([api.llmSettings(), api.graph("all", undefined, "all")])
       .then(([nextSettings, graph]) => {
         setSettings(nextSettings);
         setNodes(graph.nodes);

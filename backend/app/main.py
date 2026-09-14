@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.database.db import init_db
 from app.models.schemas import (
@@ -15,20 +16,34 @@ from app.models.schemas import (
     MergeCardRequest,
     MergeNodeRequest,
     ResetDatabaseRequest,
+    SuggestionDecision,
+    ImportSettings,
+    DeleteDocumentRequest,
+    ValidationSettings,
+    OrphanUpdate,
+    ValidationApplyRequest,
+    SuggestionRepair,
+    SuggestionTargetCreate,
 )
 from app.services import (
     admin_service,
     analysis_service,
     card_service,
+    coherence_service,
     changelog_service,
     document_service,
     export_service,
     graph_service,
     job_service,
+    validation_service,
+    orphan_service,
 )
 
 
 app = FastAPI(title="ECUME API", version="0.1.0")
+
+from app.routers.references import router as references_router
+app.include_router(references_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,6 +57,8 @@ app.add_middleware(
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    job_service.recover_interrupted_jobs()
+    document_service.recover_pending_purges()
 
 
 @app.get("/health")
@@ -92,7 +109,8 @@ def reset_database(request: ResetDatabaseRequest) -> dict:
 @app.post("/documents/upload")
 async def upload_document(file: UploadFile = File(...)) -> dict:
     try:
-        return await document_service.save_upload(file)
+        document = await document_service.save_upload(file)
+        return document_service.document_summary(document["id"])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -100,6 +118,63 @@ async def upload_document(file: UploadFile = File(...)) -> dict:
 @app.get("/documents")
 def list_documents() -> list[dict]:
     return document_service.list_documents()
+
+
+@app.get("/imports/settings")
+def import_settings() -> dict:
+    return document_service.get_import_settings()
+
+
+@app.get("/validation/settings")
+def validation_settings() -> dict:
+    return validation_service.get_settings()
+
+
+@app.put("/validation/settings")
+def save_validation_settings(settings: ValidationSettings) -> dict:
+    return validation_service.save_settings(settings)
+
+
+@app.post("/validation/apply")
+def apply_validation(request: ValidationApplyRequest) -> dict:
+    return validation_service.apply_to_undecided(request.card_ids, request.settings.model_dump())
+
+
+@app.put("/imports/settings")
+def save_import_settings(settings: ImportSettings) -> dict:
+    return document_service.save_import_settings(settings.retention_policy)
+
+
+@app.put("/documents/{document_id}/retention")
+def document_retention(document_id: str, settings: ImportSettings) -> dict:
+    try:
+        return document_service.set_retention_policy(document_id, settings.retention_policy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/documents/{document_id}/purge")
+def purge_document(document_id: str) -> dict:
+    try:
+        return document_service.purge_source(document_id)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Purge non terminee : {exc}") from exc
+
+
+@app.post("/documents/{document_id}/source")
+async def restore_document_source(document_id: str, file: UploadFile = File(...)) -> dict:
+    try:
+        return await run_in_threadpool(document_service.restore_source, document_id, file)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/documents/{document_id}")
+def delete_document(document_id: str, request: DeleteDocumentRequest) -> dict:
+    try:
+        return document_service.delete_document(document_id, **request.model_dump())
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/documents/{document_id}")
@@ -111,9 +186,9 @@ def get_document(document_id: str) -> dict:
 
 
 @app.post("/documents/{document_id}/analyze")
-async def analyze_document(document_id: str) -> dict:
+async def analyze_document(document_id: str, settings: ValidationSettings | None = None, extraction_mode: str = Query(default="sober", pattern="^(sober|balanced|exhaustive)$")) -> dict:
     try:
-        return job_service.start_analysis_job(document_id)
+        return job_service.start_analysis_job(document_id, settings.model_dump() if settings else None, extraction_mode=extraction_mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -176,12 +251,53 @@ def merge_card(card_id: str, request: MergeCardRequest) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.delete("/cards/{card_id}")
+def delete_card(card_id: str) -> dict:
+    try:
+        return card_service.delete_card(card_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/cards/{card_id}/concepts/{node_id}")
+def detach_concept(card_id: str, node_id: str) -> dict:
+    try:
+        return card_service.detach_concept(card_id, node_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/cards/{card_id}/suggestions/{suggestion_id}/decision")
+def decide_suggestion(card_id: str, suggestion_id: str, decision: SuggestionDecision) -> dict:
+    try:
+        return coherence_service.decide_suggestion(card_id, suggestion_id, decision.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/cards/{card_id}/suggestions/{suggestion_id}/repair")
+def repair_suggestion(card_id: str, suggestion_id: str, correction: SuggestionRepair) -> dict:
+    try:
+        return coherence_service.repair_suggestion(card_id, suggestion_id, correction)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/graph")
 def get_graph(
     filter: str = Query(default="all"),
     node_id: str | None = Query(default=None),
+    scope: str = Query(default="validated", pattern="^(validated|all)$"),
 ) -> dict:
-    return graph_service.graph_payload(filter_mode=filter, node_id=node_id)
+    return graph_service.graph_payload(filter_mode=filter, node_id=node_id, scope=scope)
+
+
+@app.post("/cards/{card_id}/suggestions/{suggestion_id}/target")
+def create_suggestion_target(card_id: str, suggestion_id: str, request: SuggestionTargetCreate) -> dict:
+    try:
+        return coherence_service.create_suggestion_target(card_id, suggestion_id, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/graph/nodes")
@@ -220,7 +336,19 @@ def merge_node(node_id: str, request: MergeNodeRequest) -> dict:
 
 @app.post("/graph/edges")
 def create_edge(edge: KnowledgeEdgeIn) -> dict:
-    return graph_service.create_edge(edge)
+    from app.database.db import transaction
+    try:
+        with transaction():
+            card_id = edge.metadata.get("card_id")
+            if card_id:
+                card = card_service.require_card(card_id)
+                if edge.source_node_id not in card_service._all_card_node_ids(card):
+                    raise ValueError("La source du lien doit appartenir a la carte.")
+            result = graph_service.create_edge(edge)
+            coherence_service.refresh_states()
+            return next(item for item in graph_service.list_edges() if item["id"] == result["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/graph/edges/{edge_id}")
@@ -236,25 +364,55 @@ def get_orphans() -> list[dict]:
     return graph_service.find_orphans()
 
 
+@app.post("/graph/nodes/{node_id}/orphan")
+def update_orphan(node_id: str, request: OrphanUpdate) -> dict:
+    try:
+        return orphan_service.update_orphan(node_id, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/cards/{card_id}/concept-proposals/{proposal_id}/{action}")
+def decide_concept_proposal(card_id: str, proposal_id: str, action: str) -> dict:
+    from app.services.salience_service import decide_concept
+    try:
+        return decide_concept(card_id, proposal_id, action)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/graph/targets")
+def search_targets(q: str = Query(default="", max_length=200), source_id: str = "", document_id: str = "",
+                   scope: str = Query(default="all", pattern="^(all|validated|document|close)$"),
+                   node_type: str = Query(default="", pattern="^(|effect|object|action|condition|task|theme)$"),
+                   offset: int = Query(default=0, ge=0, le=100000), limit: int = Query(default=8, ge=1, le=8)) -> dict:
+    return graph_service.search_targets(q, source_id=source_id, document_id=document_id, scope=scope, node_type=node_type, offset=offset, limit=limit)
+
+
+@app.get("/graph/search")
+def search_graph(q: str = Query(default="", max_length=200)) -> list[dict]:
+    return graph_service.search_validated_graph(q)
+
+
 @app.get("/export/json")
-def export_json() -> FileResponse:
-    return FileResponse(export_service.export_json(), filename="ecume_export.json")
+def export_json(scope: str = Query(default="validated", pattern="^(validated|all)$")) -> FileResponse:
+    return FileResponse(export_service.export_json(scope), filename="ecume_export.json")
 
 
 @app.get("/export/jsonld")
-def export_jsonld() -> FileResponse:
-    return FileResponse(export_service.export_jsonld(), filename="ecume_export.jsonld")
+def export_jsonld(scope: str = Query(default="validated", pattern="^(validated|all)$")) -> FileResponse:
+    return FileResponse(export_service.export_jsonld(scope), filename="ecume_export.jsonld")
 
 
 @app.get("/export/csv")
-def export_csv() -> FileResponse:
-    return FileResponse(export_service.export_csv_bundle(), filename="ecume_csv_export.zip")
+def export_csv(scope: str = Query(default="validated", pattern="^(validated|all)$")) -> FileResponse:
+    return FileResponse(export_service.export_csv_bundle(scope), filename="ecume_csv_export.zip")
 
 
 @app.get("/export/memgraph")
-def export_memgraph() -> FileResponse:
+def export_memgraph(scope: str = Query(default="validated", pattern="^(validated|all)$")) -> FileResponse:
     return FileResponse(
-        export_service.export_memgraph_bundle(), filename="ecume_memgraph_export.zip"
+        export_service.export_memgraph_bundle(scope), filename="ecume_memgraph_export.zip"
     )
 
 

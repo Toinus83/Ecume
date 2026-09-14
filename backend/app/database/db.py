@@ -1,11 +1,38 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
 from datetime import datetime, timezone
 import sqlite3
 from typing import Iterator
 
 from app.config import DATA_DIR, DB_PATH, EXPORT_DIR, UPLOAD_DIR
+
+_transaction_connection: ContextVar[sqlite3.Connection | None] = ContextVar("ecume_transaction", default=None)
+
+
+@contextmanager
+def transaction():
+    existing = _transaction_connection.get()
+    if existing is not None:
+        yield existing
+        return
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        token = _transaction_connection.set(conn)
+        try:
+            yield conn
+        finally:
+            _transaction_connection.reset(token)
+
+
+def atomic(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with transaction():
+            return function(*args, **kwargs)
+    return wrapped
 
 
 def now_iso() -> str:
@@ -20,12 +47,19 @@ def ensure_data_dirs() -> None:
 
 @contextmanager
 def get_db() -> Iterator[sqlite3.Connection]:
+    existing = _transaction_connection.get()
+    if existing is not None:
+        yield existing
+        return
     ensure_data_dirs()
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
         conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -140,6 +174,35 @@ def init_db() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_cards_document ON extracted_cards(document_id);
+            CREATE TABLE IF NOT EXISTS reference_repositories (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, filename TEXT NOT NULL,
+                format TEXT NOT NULL, content_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+                namespace TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '',
+                profile TEXT NOT NULL DEFAULT '{}', source_content BLOB NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS reference_terms (
+                id TEXT PRIMARY KEY, repository_id TEXT NOT NULL, uri TEXT NOT NULL,
+                label TEXT NOT NULL, aliases TEXT NOT NULL DEFAULT '[]',
+                definition TEXT NOT NULL DEFAULT '', comment TEXT NOT NULL DEFAULT '',
+                language TEXT NOT NULL DEFAULT '', types TEXT NOT NULL DEFAULT '[]',
+                properties TEXT NOT NULL DEFAULT '{}', UNIQUE(repository_id, uri)
+            );
+            CREATE TABLE IF NOT EXISTS reference_relations (
+                repository_id TEXT NOT NULL, source_uri TEXT NOT NULL, target_uri TEXT NOT NULL,
+                relation_type TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(repository_id, source_uri, target_uri, relation_type)
+            );
+            CREATE TABLE IF NOT EXISTS echo_mappings (
+                id TEXT PRIMARY KEY, node_id TEXT NOT NULL, repository_id TEXT NOT NULL,
+                target_uri TEXT NOT NULL, match_type TEXT NOT NULL, score REAL NOT NULL,
+                reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'candidate',
+                decision_origin TEXT NOT NULL DEFAULT 'heuristic', node_signature TEXT NOT NULL,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                UNIQUE(node_id, repository_id, target_uri)
+            );
+            CREATE INDEX IF NOT EXISTS idx_reference_terms_repo ON reference_terms(repository_id);
+            CREATE INDEX IF NOT EXISTS idx_echo_mappings_node ON echo_mappings(node_id);
             CREATE INDEX IF NOT EXISTS idx_nodes_type ON knowledge_nodes(type);
             CREATE INDEX IF NOT EXISTS idx_edges_source ON knowledge_edges(source_node_id);
             CREATE INDEX IF NOT EXISTS idx_edges_target ON knowledge_edges(target_node_id);
@@ -150,6 +213,7 @@ def init_db() -> None:
             """
         )
         _ensure_column(conn, "extracted_cards", "business_category", "TEXT NOT NULL DEFAULT 'resultat_recherche'")
+        _ensure_column(conn, "extracted_cards", "extraction_details", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "extracted_cards", "business_validation_status", "TEXT NOT NULL DEFAULT 'proposed'")
         _ensure_column(conn, "extracted_cards", "business_justification", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "extracted_cards", "archimate_mapping", "TEXT NOT NULL DEFAULT '{}'")
@@ -161,6 +225,33 @@ def init_db() -> None:
         _ensure_column(conn, "knowledge_nodes", "archimate_mapping", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "knowledge_nodes", "archimate_mapping_status", "TEXT NOT NULL DEFAULT 'proposed_by_llm'")
         _ensure_column(conn, "knowledge_nodes", "ontology_mapping_status", "TEXT NOT NULL DEFAULT 'to_map_later'")
+        for name, definition in {
+            "source_status": "TEXT NOT NULL DEFAULT 'retained'",
+            "retention_policy": "TEXT NOT NULL DEFAULT 'keep'",
+            "content_hash": "TEXT NOT NULL DEFAULT ''",
+            "content_length": "INTEGER NOT NULL DEFAULT 0",
+            "source_purged_at": "TEXT",
+        }.items():
+            _ensure_column(conn, "source_documents", name, definition)
+        conn.execute("""CREATE TABLE IF NOT EXISTS import_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1), retention_policy TEXT NOT NULL DEFAULT 'keep')""")
+        conn.execute("INSERT OR IGNORE INTO import_settings (id) VALUES (1)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS validation_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1), mode TEXT NOT NULL DEFAULT 'assisted',
+            auto_threshold REAL NOT NULL DEFAULT 0.9, review_threshold REAL NOT NULL DEFAULT 0.6)""")
+        conn.execute("INSERT OR IGNORE INTO validation_settings (id) VALUES (1)")
+        for table in ("extracted_cards", "knowledge_nodes", "knowledge_edges"):
+            _ensure_column(conn, table, "business_confidence", "REAL")
+            _ensure_column(conn, table, "validation_decision", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "knowledge_edges", "business_validation_status", "TEXT NOT NULL DEFAULT 'proposed'")
+        _ensure_column(conn, "knowledge_nodes", "orphan_status", "TEXT NOT NULL DEFAULT ''")
+        conn.execute("""CREATE TABLE IF NOT EXISTS document_references (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, filename TEXT NOT NULL,
+            file_type TEXT NOT NULL, created_at TEXT NOT NULL, content_hash TEXT NOT NULL,
+            content_length INTEGER NOT NULL, deleted_at TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}')""")
+    from app.services.coherence_service import migrate
+    migrate()
 
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:

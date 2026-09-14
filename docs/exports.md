@@ -4,7 +4,7 @@ Les exports ECUME sont concus pour etre lisibles hors de l'application. Un conce
 
 ## Quel Export Utiliser
 
-- `JSON` : export complet de reference, pour sauvegarder, echanger ou reimporter toutes les donnees ECUME.
+- `JSON` : connaissance validee par defaut ; archive complete disponible avec `scope=all`.
 - `JSON-LD` : pivot Linked Data simple, pour preparer une integration RDF, GraphDB ou outil de mapping semantique.
 - `CSV` : tables lisibles dans un tableur ou un pipeline de donnees.
 - `Memgraph` : CSV + script Cypher pour charger le graphe dans Memgraph.
@@ -12,6 +12,14 @@ Les exports ECUME sont concus pour etre lisibles hors de l'application. Un conce
 - `ArchiMate JSON` : lot intermediaire prudent pour controler les mappings candidats avant un futur export ArchiMate Exchange XML.
 
 ## JSON Complet
+
+Les endpoints JSON, JSON-LD, CSV et Memgraph utilisent `scope=validated` par defaut.
+Les cartes et concepts rejetes ou a revoir, ainsi que les relations non acceptees, sont exclus des collections de connaissance validee.
+Les documents et le changelog restent presents pour la tracabilite : les anciens etats dans l'historique ne sont pas des connaissances actuellement validees.
+
+Pour obtenir une archive complete comprenant aussi propositions, rejets et decisions, utiliser
+`http://127.0.0.1:8000/export/json?scope=all`. Le champ `export_metadata.scope` indique la portee.
+Cette archive est un fichier de donnees ; ECUME ne propose pas encore de restauration automatique depuis ce JSON.
 
 Le fichier `ecume_export.json` contient :
 
@@ -42,6 +50,9 @@ Le fichier `ecume_export.jsonld` utilise des URI stables :
 - `urn:ecume:ontology:{id}` pour les futurs referentiels importes
 
 Le `@context` reste volontairement simple. ECUME n'affirme pas encore une ontologie OWL/UAF complete ; il expose un graphe metier structure et tracable.
+
+Le contexte JSON-LD 1.1 definit un vocabulaire ECUME par defaut pour conserver les champs imbriques du mapping.
+Les cartes, l'historique et le manifeste sont aussi inclus ; leurs enregistrements complets sont preserves comme valeurs JSON typees (`@json`).
 
 ## CSV
 
@@ -116,13 +127,17 @@ SET n.label = row.label,
 
 LOAD CSV FROM "memgraph_edges.csv" WITH HEADER AS row
 MATCH (source:EcumeNode {id: row.source_node_id}), (target:EcumeNode {id: row.target_node_id})
-CREATE (source)-[r:ECUME_RELATION {id: row.id}]->(target)
+MERGE (source)-[r:ECUME_RELATION {id: row.id}]->(target)
 SET r.relation_type = row.relation_type,
     r.label = row.label,
     r.description = row.description;
 ```
 
 Le fichier `memgraph_import.cypher` fourni contient une version plus complete avec les metadonnees.
+
+Les fichiers CSV doivent etre accessibles au serveur Memgraph (et montes dans son conteneur si necessaire).
+Le script utilise les identifiants stables des noeuds et relations avec `MERGE` : reimporter le meme lot ne cree pas de doublons.
+Il ne supprime pas les donnees deja chargees qui sont absentes d'un export suivant. Pour comparer des instantanes complets apres des rejets ou suppressions, utiliser une base de test vide ou gerer explicitement les retraits cote cible.
 
 ## Export ArchiMate JSON
 
@@ -138,7 +153,9 @@ Il contient uniquement des candidats d'import ArchiMate, pas un modele central m
 - le mapping candidat ArchiMate 3.2 ;
 - une decision d'export indicative.
 
-La selection automatique reste conservatrice : un element est marque comme selectionnable seulement si le concept est valide metier et si la confiance du mapping candidat est au moins egale a `0.70`.
+Seuls les concepts valides metier sont presentes ; les mappings rejetes ou a revoir sont exclus.
+Un candidat n'est marque `selected_for_archimate_export` que si son mapping porte une validation architecture explicite (`validated_by_architect`) et une confiance d'au moins `0.70`.
+La validation d'une carte metier ne fournit pas cette certification : elle conserve un mapping candidat.
 
 Le format ArchiMate Model Exchange XML n'est pas genere dans cette iteration. Ce JSON sert de lot de controle avant generation XML future.
 
@@ -156,3 +173,23 @@ L'export ne mappe pas encore formellement vers UAF. Il preserve cependant les in
 - categories metier ;
 - mapping candidat ArchiMate ;
 - sources et extraits.
+# Conservation et decisions metier
+
+Une source purgee conserve son identifiant documentaire, son nom, ses dates et son
+empreinte. Les extraits courts restent attaches aux cartes et concepts. Une source
+supprimee conserve une reference minimale dans `documents` avec `source_status=deleted`.
+JSON, JSON-LD et `documents.csv` exposent l'etat de conservation. Une purge ne modifie
+pas les fichiers d'export precedemment generes ou les copies externes.
+
+`business_validation_status=auto_validated` distingue une validation automatique d'une
+validation humaine. `business_confidence` contient le score metier estime (ou null) ;
+`validation_decision` contient l'origine, la regle, les seuils et la date quand disponibles.
+Les concepts partages citent leurs cartes de soutien. `orphan_status` distingue les
+orphelins acceptes de ceux a revoir. Ces champs sont ajoutes aux CSV sans retirer les
+colonnes precedentes et sont conserves par le script Memgraph (scores CSV sous forme texte).
+Les mappings ArchiMate restent candidats, quelle que soit la validation metier.
+
+Le graphe et les exports principaux incluent la connaissance validee manuellement ou
+automatiquement. Les propositions, rejets et orphelins a revoir sont exclus ; l'archive
+`scope=all` conserve tous les etats. Les decisions historiques du changelog ne constituent
+pas une validation actuelle.

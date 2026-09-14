@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import KnowledgeGraph from "../graph/KnowledgeGraph";
 import EffectCard from "../components/EffectCard";
-import type { ExtractedCard, GraphPayload, KnowledgeNode } from "../types";
+import type { ExtractedCard, GraphPayload, GraphSearchResult, KnowledgeNode } from "../types";
+import { BookOpen, Network } from "lucide-react";
 
 interface Props {
   refreshKey: number;
+  onOpenCard: (cardId: string) => void;
 }
 
 const filters = [
@@ -16,7 +18,7 @@ const filters = [
   ["orphans", "Orphelins"]
 ] as const;
 
-export default function GraphPage({ refreshKey }: Props) {
+export default function GraphPage({ refreshKey, onOpenCard }: Props) {
   const [view, setView] = useState<"graph" | "validated">("graph");
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<KnowledgeNode | null>(null);
@@ -26,6 +28,20 @@ export default function GraphPage({ refreshKey }: Props) {
   const [editCardId, setEditCardId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [localRefresh, setLocalRefresh] = useState(0);
+  const [results, setResults] = useState<GraphSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setSearching(!!query.trim());
+    const timer = window.setTimeout(async () => {
+      try {
+        const found = query.trim() ? await api.searchGraph(query) : [];
+        if (!cancelled) { setResults(found); setError(""); }
+      } catch (err) { if (!cancelled) setError(String(err)); }
+      finally { if (!cancelled) setSearching(false); }
+    }, 250);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [query, localRefresh, refreshKey]);
 
   useEffect(() => {
     Promise.all([api.graph(filter, selected?.id), api.cards()])
@@ -50,7 +66,6 @@ export default function GraphPage({ refreshKey }: Props) {
       ...card.tasks,
     ].join(" ").toLowerCase().includes(needle);
   });
-  const effectNodes = graph?.nodes.filter((node) => node.type === "effect") ?? [];
   const relatedEdges = selected && graph
     ? graph.edges.filter((edge) => edge.source_node_id === selected.id || edge.target_node_id === selected.id)
     : [];
@@ -85,13 +100,27 @@ export default function GraphPage({ refreshKey }: Props) {
         )}
         {selected && <button className="ghost-button" onClick={() => setSelected(null)}>Afficher le graphe complet</button>}
       </div>
+      <h2 className="query-title">Interroger le graphe</h2>
       <input
         className="search-input"
-        placeholder={view === "graph" ? "Rechercher dans la fiche sélectionnée ou les cartes validées" : "Rechercher dans les cartes validées"}
+        placeholder={view === "graph" ? "Rechercher un concept validé" : "Rechercher dans les cartes validées"}
         value={query}
         onChange={(event) => setQuery(event.target.value)}
       />
       {error && <p className="error">{error}</p>}
+      {view === "graph" && query.trim() && <div className="graph-search-results" aria-live="polite">
+        {searching ? <p>Recherche…</p> : results.length === 0 ? <p>Aucun concept validé trouvé.</p> : results.map(result => <article key={result.node.id}>
+          <div className="section-title"><h3>{result.node.label}</h3><span>{result.node.business_validation_status === "auto_validated" ? "Auto-validé" : "Validé"}</span></div>
+          <p>{result.node.description}</p>
+          <details><summary>{result.neighbors.length} relations directes</summary>
+            {result.neighbors.map(({edge, node}) => <p key={edge.id}>{edge.source_node_id === result.node.id ? result.node.label : node.label} → {edge.relation_type} → {edge.target_node_id === result.node.id ? result.node.label : node.label}</p>)}
+          </details>
+          <div className="button-row"><button className="ghost-button" onClick={() => { setSelected(result.node); setFilter("all"); setQuery(""); }}><Network size={16} />Voir dans le graphe</button>
+            {result.cards.map(card => <button key={card.id} className="ghost-button" title={card.label} onClick={() => onOpenCard(card.id)}><BookOpen size={16} />Ouvrir la carte : {card.label}</button>)}
+          </div>
+        </article>)}
+        {results.length === 50 && <p>50 premiers résultats. Précise la recherche pour affiner.</p>}
+      </div>}
 
       {view === "graph" ? (
         <div className="graph-layout">
@@ -131,7 +160,6 @@ export default function GraphPage({ refreshKey }: Props) {
                 key={card.id}
                 card={card}
                 allCards={acceptedCards}
-                effectNodes={effectNodes}
                 onOpenGraph={() => setView("graph")}
                 onChanged={() => {
                   setLocalRefresh((value) => value + 1);

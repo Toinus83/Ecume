@@ -55,12 +55,23 @@ async def test_llm_settings() -> dict:
 def reset_database(*, confirmation: str, delete_uploads: bool, delete_exports: bool) -> dict:
     if confirmation != "RESET ECUME":
         raise ValueError("Confirmation invalide. Saisis exactement RESET ECUME.")
+    with get_db() as conn:
+        if conn.execute("SELECT 1 FROM analysis_jobs WHERE status IN ('queued', 'running')").fetchone():
+            raise ValueError("Attends la fin des analyses avant de reinitialiser la base.")
     tables = [
+        "echo_mappings",
+        "reference_relations",
+        "reference_terms",
+        "reference_repositories",
+        "link_suggestions",
+        "card_relations",
+        "card_concepts",
         "knowledge_edges",
         "knowledge_node_aliases",
         "knowledge_nodes",
         "extracted_cards",
         "source_documents",
+        "document_references",
         "analysis_jobs",
         "change_log",
     ]

@@ -1,10 +1,15 @@
 # Environnements locaux
 .env
+.env.*
+!.env.example
+*.pem
+*.key
 .venv/
 venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+.pytest_coherence/
 
 # Données utilisateur et exports locaux
 data/
@@ -12,6 +17,9 @@ data/uploads/
 data/exports/
 data/ecume.db
 data/*.db
+*.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 *.pdf
@@ -21,6 +29,9 @@ data/*.db
 *.xlsx
 *.ppt
 *.pptx
+*.ttl
+*.rdf
+*.owl
 
 # Frontend
 frontend/node_modules/

@@ -6,7 +6,7 @@ import uuid
 import unicodedata
 from typing import Any
 
-from app.database.db import get_db, now_iso
+from app.database.db import atomic, get_db, now_iso
 from app.models.schemas import AliasRequest, KnowledgeEdgeIn, KnowledgeNodeIn
 from app.semantic.archimate_mapping import (
     default_category_for_node_type,
@@ -16,9 +16,16 @@ from app.services.changelog_service import record_change
 from app.services.serialization import row_to_dict, rows_to_dicts
 
 
+@atomic
 def create_node(node: KnowledgeNodeIn) -> dict:
+    if not node.metadata.get("card_id"):
+        node = node.model_copy(update={"metadata": {**node.metadata, "standalone_status": node.status}})
     candidates = find_similar_nodes(node.label, node.type)
     exact = next((candidate for candidate in candidates if candidate["match_kind"] == "identical"), None)
+    if exact and node.type == "effect":
+        existing_effect = get_node(exact["id"])
+        if any(existing_effect.get(key) != getattr(node, key) for key in ("description", "level", "business_category")):
+            exact = None
     if exact and not node.metadata.get("force_new"):
         _attach_variant(exact["id"], node.label, "variant", (node.source_ids or [None])[0])
         _append_source_to_node(exact["id"], node.source_ids)
@@ -35,23 +42,7 @@ def create_node(node: KnowledgeNodeIn) -> dict:
             existing["dedupe"] = {"action": "reused_exact", "candidates": candidates}
             return existing
 
-    close = [candidate for candidate in candidates if candidate["match_kind"] != "identical"]
-    if close and not node.metadata.get("force_new"):
-        existing = get_node(close[0]["id"])
-        if existing:
-            _attach_variant(existing["id"], node.label, "variant", (node.source_ids or [None])[0])
-            _append_source_to_node(existing["id"], node.source_ids)
-            record_change(
-                entity_type="node",
-                entity_id=existing["id"],
-                action="similar_concept_detected",
-                origin=str(node.metadata.get("origin", "import")),
-                source_id=(node.source_ids or [None])[0],
-                details={"incoming_label": node.label, "candidates": close[:5]},
-            )
-            existing["dedupe"] = {"action": "candidate_found", "candidates": close[:5]}
-            return existing
-
+    close = [candidate for candidate in candidates if candidate["match_kind"] != "identical" or not exact]
     node_id = str(uuid.uuid4())
     timestamp = now_iso()
     with get_db() as conn:
@@ -99,14 +90,38 @@ def create_node(node: KnowledgeNodeIn) -> dict:
         source_id=(node.source_ids or [None])[0],
         details={"label": node.label, "type": node.type},
     )
-    return row_to_dict(row)
+    result = row_to_dict(row)
+    if close:
+        result["dedupe"] = {"action": "candidate_found", "candidates": close[:5]}
+    return result
 
 
+@atomic
 def create_edge(edge: KnowledgeEdgeIn) -> dict:
+    from app.services.coherence_service import bind_relation
+    from app.models.schemas import RelationType
+    from typing import get_args
+    if edge.relation_type not in get_args(RelationType):
+        raise ValueError("Type de relation inconnu.")
+    if not get_node(edge.source_node_id) or not get_node(edge.target_node_id):
+        raise ValueError("Les deux concepts du lien doivent exister.")
+    if edge.source_node_id == edge.target_node_id:
+        raise ValueError("Un concept ne peut pas etre relie a lui-meme.")
     edge_id = str(uuid.uuid4())
     timestamp = now_iso()
     label = edge.label or edge.relation_type
     with get_db() as conn:
+        existing = conn.execute("""SELECT * FROM knowledge_edges WHERE source_node_id = ?
+            AND target_node_id = ? AND relation_type = ? ORDER BY created_at, id LIMIT 1""",
+            (edge.source_node_id, edge.target_node_id, edge.relation_type)).fetchone()
+        if existing:
+            result = row_to_dict(existing)
+            source_ids = list(dict.fromkeys([*result["source_ids"], *edge.source_ids]))
+            conn.execute("UPDATE knowledge_edges SET source_ids = ? WHERE id = ?", (json.dumps(source_ids), result["id"]))
+            result["source_ids"] = source_ids
+            if edge.metadata.get("card_id") and not edge.metadata.get("suggestion_id"):
+                bind_relation(edge.metadata["card_id"], result["id"], "manual" if edge.metadata.get("origin") == "user" else "structural")
+            return result
         conn.execute(
             """
             INSERT INTO knowledge_edges
@@ -129,6 +144,8 @@ def create_edge(edge: KnowledgeEdgeIn) -> dict:
             ),
         )
         row = conn.execute("SELECT * FROM knowledge_edges WHERE id = ?", (edge_id,)).fetchone()
+        if edge.metadata.get("card_id") and not edge.metadata.get("suggestion_id"):
+            bind_relation(edge.metadata["card_id"], edge_id, "manual" if edge.metadata.get("origin") == "user" else "structural")
     record_change(
         entity_type="edge",
         entity_id=edge_id,
@@ -158,13 +175,25 @@ def list_edges() -> list[dict]:
     return rows_to_dicts(rows)
 
 
+@atomic
 def delete_edge(edge_id: str) -> dict[str, Any]:
     with get_db() as conn:
         row = conn.execute("SELECT * FROM knowledge_edges WHERE id = ?", (edge_id,)).fetchone()
         if not row:
             raise ValueError("Lien introuvable.")
         edge = row_to_dict(row)
-        conn.execute("DELETE FROM knowledge_edges WHERE id = ?", (edge_id,))
+        metadata = dict(edge["metadata"])
+        metadata.pop("standalone_status", None)
+        conn.execute("UPDATE knowledge_edges SET metadata = ? WHERE id = ?", (json.dumps(metadata), edge_id))
+        contexts = [row[0] for row in conn.execute("SELECT DISTINCT card_id FROM card_relations WHERE edge_id = ?", (edge_id,))]
+        conn.execute("DELETE FROM card_relations WHERE edge_id = ?", (edge_id,))
+        conn.execute("UPDATE link_suggestions SET status = 'rejected', edge_id = NULL, updated_at = ? WHERE edge_id = ?", (now_iso(), edge_id))
+        if contexts:
+            for card_id in contexts:
+                conn.execute("INSERT INTO card_relations VALUES (?, ?, 'rejected')", (card_id, edge_id))
+            conn.execute("UPDATE knowledge_edges SET status = 'rejected', updated_at = ? WHERE id = ?", (now_iso(), edge_id))
+        else:
+            conn.execute("DELETE FROM knowledge_edges WHERE id = ?", (edge_id,))
     record_change(
         entity_type="edge",
         entity_id=edge_id,
@@ -176,10 +205,16 @@ def delete_edge(edge_id: str) -> dict[str, Any]:
             "relation_type": edge["relation_type"],
         },
     )
+    from app.services.coherence_service import refresh_states
+    refresh_states(node_ids=[edge["source_node_id"], edge["target_node_id"]], edge_ids=[edge_id])
     return {"deleted_edge": edge}
 
 
+@atomic
 def delete_node(node_id: str) -> dict[str, Any]:
+    from app.services.coherence_service import concept_users
+    if concept_users(node_id):
+        raise ValueError("Concept utilise par une carte : retire-le de ses cartes avant une suppression globale.")
     node = get_node(node_id)
     if not node:
         raise ValueError("Noeud introuvable.")
@@ -192,6 +227,9 @@ def delete_node(node_id: str) -> dict[str, Any]:
             (node_id, node_id),
         ).fetchall()
         edge_ids = [row["id"] for row in edge_rows]
+        for edge_id in edge_ids:
+            delete_edge(edge_id)
+        conn.execute("UPDATE link_suggestions SET status = 'to_review', updated_at = ? WHERE source_node_id = ? OR target_node_id = ?", (now_iso(), node_id, node_id))
         conn.execute(
             "DELETE FROM knowledge_edges WHERE source_node_id = ? OR target_node_id = ?",
             (node_id, node_id),
@@ -305,9 +343,12 @@ def update_card_edges_status(card_id: str, status: str) -> None:
         )
 
 
-def graph_payload(filter_mode: str = "all", node_id: str | None = None) -> dict[str, Any]:
+def graph_payload(filter_mode: str = "all", node_id: str | None = None, scope: str = "validated") -> dict[str, Any]:
     nodes = list_nodes()
     edges = list_edges()
+    if scope == "validated":
+        from app.services.coherence_service import validated_graph
+        nodes, edges = validated_graph(nodes, edges)
     node_ids_all = {node["id"] for node in nodes}
     edges = [
         edge
@@ -351,6 +392,8 @@ def graph_payload(filter_mode: str = "all", node_id: str | None = None) -> dict[
             if edge["source_node_id"] in neighbor_ids and edge["target_node_id"] in neighbor_ids
         ]
 
+    visible_ids = {node["id"] for node in nodes}
+    edges = [edge for edge in edges if edge["source_node_id"] in visible_ids and edge["target_node_id"] in visible_ids]
     return {
         "nodes": nodes,
         "edges": edges,
@@ -373,15 +416,20 @@ def graph_payload(filter_mode: str = "all", node_id: str | None = None) -> dict[
 
 
 def find_orphans() -> list[dict]:
-    nodes = list_nodes()
+    nodes = [node for node in list_nodes() if node["status"] not in {"rejected", "linked"}]
     edges = list_edges()
+    node_ids = {node["id"] for node in nodes}
     connected = set()
     has_parent = set()
     for edge in edges:
+        if edge["status"] not in {"accepted", "accepted_orphan"} or not {edge["source_node_id"], edge["target_node_id"]} <= node_ids:
+            continue
         connected.add(edge["source_node_id"])
         connected.add(edge["target_node_id"])
-        if edge["relation_type"] in {"contribue à", "se décompose en"}:
+        if edge["relation_type"] == "contribue à":
             has_parent.add(edge["source_node_id"])
+        elif edge["relation_type"] == "se décompose en":
+            has_parent.add(edge["target_node_id"])
     orphans = []
     for node in nodes:
         isolated = node["id"] not in connected
@@ -389,8 +437,94 @@ def find_orphans() -> list[dict]:
         if isolated or hierarchical_orphan:
             node["orphan_kind"] = "concept isolé" if isolated else "effet sans parent"
             orphans.append(node)
+    from app.services.coherence_service import concept_users
+    with get_db() as conn:
+        sources = {row["id"]: row["title"] for row in conn.execute("SELECT id, title FROM source_documents UNION ALL SELECT id, title FROM document_references")}
+    for node in orphans:
+        node["source_titles"] = [sources[item] for item in node["source_ids"] if item in sources]
+        node["source_card_ids"] = concept_users(node["id"])
+    from app.services.salience_service import node_importance
+    importance = node_importance()
+    for node in orphans:
+        node["importance"] = importance.get(node["id"], "unclassified")
+    orphans.sort(key=lambda node: (node["importance"] != "principal", _normalize(node["label"])))
     return orphans
 
+
+def search_validated_graph(query: str) -> list[dict]:
+    from app.services.coherence_service import concept_users, is_valid, validated_graph
+    from app.services.analysis_service import get_card
+    nodes, edges = validated_graph(list_nodes(), list_edges())
+    by_id = {node["id"]: node for node in nodes}
+    needle = _normalize(query.strip())
+    if not needle:
+        return []
+    with get_db() as conn:
+        aliases = {}
+        for row in conn.execute("SELECT node_id, label FROM knowledge_node_aliases"):
+            aliases.setdefault(row["node_id"], []).append(row["label"])
+    results = []
+    for node in sorted(nodes, key=lambda item: _normalize(item["label"])):
+        if needle not in _normalize(" ".join([node["label"], node["description"], *aliases.get(node["id"], [])])):
+            continue
+        neighbors = [{"edge": edge, "node": by_id[edge["target_node_id"] if edge["source_node_id"] == node["id"] else edge["source_node_id"]]}
+                     for edge in edges if node["id"] in (edge["source_node_id"], edge["target_node_id"])]
+        cards = [card for card_id in concept_users(node["id"]) if (card := get_card(card_id)) and is_valid(card)]
+        results.append({"node": node, "neighbors": neighbors, "cards": [{"id": card["id"], "label": card["main_effect"]["label"]} for card in cards]})
+        if len(results) >= 50:
+            break
+    return results
+
+
+
+def search_targets(query: str, *, source_id: str = "", document_id: str = "", scope: str = "all",
+                   node_type: str = "", offset: int = 0, limit: int = 8) -> dict:
+    from app.services.coherence_service import is_valid
+    from app.services.salience_service import node_importance
+    importance = node_importance()
+    needle = _normalize(query.strip())
+    if len(needle) < 2:
+        return {"items": [], "total": 0, "has_more": False}
+    source = get_node(source_id) if source_id else None
+    with get_db() as conn:
+        aliases = {}
+        for row in conn.execute("SELECT node_id, label FROM knowledge_node_aliases"):
+            aliases.setdefault(row["node_id"], []).append(row["label"])
+        titles = {row["id"]: row["title"] for row in conn.execute(
+            "SELECT id, title FROM source_documents UNION SELECT id, title FROM document_references")}
+        edges = conn.execute("SELECT source_node_id, target_node_id FROM knowledge_edges WHERE status NOT IN ('rejected', 'linked')").fetchall()
+    degree, linked = {}, set()
+    for edge in edges:
+        for endpoint in edge:
+            degree[endpoint] = degree.get(endpoint, 0) + 1
+        if source_id in edge:
+            linked.update(edge)
+    ranked = []
+    for node in list_nodes():
+        if node["id"] == source_id or node["status"] in {"rejected", "linked"} or (node_type and node["type"] != node_type):
+            continue
+        valid = is_valid(node)
+        same_document = bool(document_id and document_id in node["source_ids"])
+        if scope == "validated" and not valid or scope == "document" and not same_document:
+            continue
+        labels = [_normalize(value) for value in [node["label"], *aliases.get(node["id"], [])]]
+        exact = needle in labels
+        similarity = max((_similarity(needle, label) for label in labels), default=0)
+        contains = any(needle in label for label in labels)
+        description = _normalize(node["description"])
+        terms = needle.split()
+        relevant = exact or contains or similarity >= .55 or all(term in description for term in terms)
+        if not relevant or (scope == "close" and not (exact or contains or similarity >= .65)):
+            continue
+        same_category = bool(source and source["business_category"] == node["business_category"])
+        item = {**node, "importance": importance.get(node["id"], "unclassified"), "source_titles": [titles[value] for value in node["source_ids"] if value in titles],
+                "already_linked": node["id"] in linked}
+        rank = (-int(importance.get(node["id"]) == "principal"), -int(valid), -int(same_document), -int(same_category),
+                -int(exact), -int(contains), -round(similarity, 3), -degree.get(node["id"], 0), _normalize(node["label"]), node["id"])
+        ranked.append((rank, item))
+    ranked.sort(key=lambda item: item[0])
+    return {"items": [item for _, item in ranked[offset:offset + limit]], "total": len(ranked),
+            "has_more": offset + limit < len(ranked)}
 
 def dashboard_stats() -> dict[str, int]:
     with get_db() as conn:
@@ -463,6 +597,7 @@ def find_similar_nodes(label: str, node_type: str | None = None) -> list[dict[st
     return sorted(candidates, key=lambda item: item["score"], reverse=True)
 
 
+@atomic
 def add_alias(node_id: str, request: AliasRequest) -> dict:
     if not get_node(node_id):
         raise ValueError("Noeud introuvable.")
@@ -487,12 +622,29 @@ def add_alias(node_id: str, request: AliasRequest) -> dict:
     return {"id": alias_id, "node_id": node_id, "label": request.label, "kind": request.kind}
 
 
+@atomic
 def merge_nodes(source_node_id: str, target_node_id: str, note: str = "") -> dict:
+    from app.services.coherence_service import concept_users
+    if source_node_id == target_node_id:
+        raise ValueError("Choisis un autre concept.")
+    if concept_users(source_node_id) or concept_users(target_node_id):
+        raise ValueError("Fusion globale bloquee : ces concepts sont utilises par des cartes. Utilise la fusion de cartes.")
     source = get_node(source_node_id)
     target = get_node(target_node_id)
     if not source or not target:
         raise ValueError("Noeud source ou cible introuvable.")
+    if source["type"] != target["type"]:
+        raise ValueError("Les concepts doivent avoir le meme type.")
+    with get_db() as conn:
+        if conn.execute("SELECT 1 FROM link_suggestions WHERE source_node_id IN (?, ?) OR target_node_id IN (?, ?)",
+                        (source_node_id, target_node_id, source_node_id, target_node_id)).fetchone():
+            raise ValueError("Des rapprochements utilisent ces concepts. Termine leur traitement avant la fusion globale.")
+        if conn.execute("""SELECT 1 FROM card_relations b JOIN knowledge_edges e ON e.id = b.edge_id
+                           WHERE e.source_node_id IN (?, ?) OR e.target_node_id IN (?, ?)""",
+                        (source_node_id, target_node_id, source_node_id, target_node_id)).fetchone():
+            raise ValueError("Des relations de cartes utilisent ces concepts.")
     add_alias(target_node_id, AliasRequest(label=source["label"], kind="former_label"))
+    _append_source_to_node(target_node_id, source.get("source_ids", []))
     with get_db() as conn:
         conn.execute(
             "UPDATE knowledge_edges SET source_node_id = ?, updated_at = ? WHERE source_node_id = ?",
@@ -510,6 +662,26 @@ def merge_nodes(source_node_id: str, target_node_id: str, note: str = "") -> dic
             """,
             (now_iso(), source_node_id),
         )
+        conn.execute("UPDATE knowledge_edges SET status = 'rejected' WHERE source_node_id = target_node_id")
+        for alias in conn.execute("SELECT * FROM knowledge_node_aliases WHERE node_id = ?", (source_node_id,)).fetchall():
+            _attach_variant(target_node_id, alias["label"], alias["kind"], alias["source_id"])
+        seen = {}
+        for row in conn.execute("SELECT * FROM knowledge_edges ORDER BY created_at, id").fetchall():
+            edge = row_to_dict(row)
+            if target_node_id not in (edge["source_node_id"], edge["target_node_id"]):
+                continue
+            key = (edge["source_node_id"], edge["target_node_id"], edge["relation_type"])
+            if key in seen:
+                canonical = seen[key]
+                merged_sources = list(dict.fromkeys([*canonical["source_ids"], *edge["source_ids"]]))
+                statuses = (canonical["status"], edge["status"])
+                status = next((s for s in ("accepted", "accepted_orphan", "to_confirm", "proposed") if s in statuses), "rejected")
+                conn.execute("UPDATE knowledge_edges SET source_ids = ?, status = ? WHERE id = ?", (json.dumps(merged_sources), status, canonical["id"]))
+                canonical.update(source_ids=merged_sources, status=status)
+                metadata = {**edge["metadata"], "merged_into": canonical["id"]}
+                conn.execute("UPDATE knowledge_edges SET status = 'rejected', metadata = ? WHERE id = ?", (json.dumps(metadata), edge["id"]))
+            else:
+                seen[key] = edge
     record_change(
         entity_type="node",
         entity_id=target_node_id,

@@ -20,6 +20,8 @@ JSON_FIELDS = {
     "archimate_mapping",
     "details",
     "result_card_ids",
+    "validation_decision",
+    "extraction_details",
 }
 
 
@@ -36,8 +38,10 @@ def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     data = dict(row)
     for key in list(data):
         if key in JSON_FIELDS:
-            default = [] if key.endswith("s") or key in {"suggested_links"} else {}
+            default = {} if key == "extraction_details" else [] if key.endswith("s") or key in {"suggested_links"} else {}
             data[key] = loads(data[key], default)
+            if key == "extraction_details" and not isinstance(data[key], dict):
+                data[key] = {}
     return data
 
 

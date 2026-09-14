@@ -39,7 +39,9 @@ def test_create_document_from_upload():
     assert response.status_code == 200
     payload = response.json()
     assert payload["filename"] == "procedure.txt"
-    assert "disponibilite" in payload["content_text"]
+    assert "content_text" not in payload
+    assert "disponibilite" in document_service.get_document(payload["id"])["content_text"]
+    assert payload["can_reanalyze"] is True
 
 
 def test_create_node_and_edge():

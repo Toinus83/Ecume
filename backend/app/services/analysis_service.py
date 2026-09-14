@@ -5,7 +5,7 @@ import uuid
 from typing import Any, Callable
 
 from app.config import get_llm_config
-from app.database.db import get_db, now_iso
+from app.database.db import atomic, get_db, now_iso, transaction
 from app.llm.api import ApiLLMProvider
 from app.llm.heuristic import HeuristicProvider
 from app.llm.ollama import OllamaProvider
@@ -58,13 +58,19 @@ def _mapping_status(value: str | None) -> str:
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
-async def analyze_document(document_id: str, progress_callback: ProgressCallback | None = None) -> dict:
+async def analyze_document(document_id: str, progress_callback: ProgressCallback | None = None, *, validation_policy: dict | None = None, extraction_mode: str = "sober") -> dict:
     document = get_document(document_id)
     if not document:
         raise ValueError("Document introuvable.")
+    if not document["content_text"].strip():
+        raise ValueError("Texte source absent : fournis a nouveau le fichier.")
     warnings: list[str] = []
+    from app.services.validation_service import get_settings
+    validation_policy = dict(validation_policy if validation_policy is not None else get_settings())
     all_cards: list[dict] = []
     chunks = _chunk_text(document["content_text"])
+    provider = _provider()
+    provider.extraction_mode = extraction_mode
     if progress_callback:
         progress_callback(
             {
@@ -87,7 +93,7 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
             )
         existing_nodes = graph_service.existing_nodes_for_prompt()
         try:
-            analysis = await _provider().analyze_document(
+            analysis = await provider.analyze_document(
                 title=f"{document['title']} - partie {index}/{len(chunks)}",
                 content_text=chunk,
                 existing_nodes=existing_nodes,
@@ -107,7 +113,8 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
             )
             warnings.append(f"Analyse heuristique utilisée sur la partie {index} : {exc}")
         warnings.extend(analysis.get("warnings") or [])
-        all_cards.extend(analysis.get("cards") or [])
+        from app.services.salience_service import preserve_source_checks
+        all_cards.extend(preserve_source_checks(analysis.get("cards") or [], chunk, index, document["id"]))
         if progress_callback:
             progress_callback(
                 {
@@ -129,8 +136,9 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
                 "progress": 80,
             }
         )
-    for raw_card in consolidated_cards:
-        cards.append(_store_card(document, raw_card, warnings))
+    with transaction():
+        for raw_card in consolidated_cards:
+            cards.append(_store_card(document, raw_card, warnings, validation_policy=validation_policy, extraction_mode=extraction_mode))
     if progress_callback:
         progress_callback(
             {
@@ -191,19 +199,41 @@ def _consolidate_cards(raw_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
     consolidated: list[dict[str, Any]] = []
     seen_labels: set[str] = set()
     for card in raw_cards:
+        if not isinstance(card, dict):
+            continue
         main_effect = card.get("main_effect") or {}
+        if not isinstance(main_effect, dict):
+            main_effect = {"label": str(main_effect), "description": ""}
+            card = {**card, "main_effect": main_effect}
         label = main_effect.get("label") if isinstance(main_effect, dict) else str(main_effect)
         normalized = " ".join(str(label).lower().split())
         if not normalized:
             continue
         if normalized in seen_labels:
+            previous = next(item for item in consolidated if " ".join(str((item.get("main_effect") or {}).get("label", "")).lower().split()) == normalized)
+            # Repeated titles across chunks must not discard distances, exceptions or sources.
+            if isinstance(main_effect, dict):
+                descriptions = list(dict.fromkeys([previous["main_effect"].get("description", ""), main_effect.get("description", "")]))
+                previous["main_effect"]["description"] = "\n\n".join(value for value in descriptions if value)
+            for field in ("objects", "actions", "conditions", "tasks", "secondary_effects", "rule_details", "concepts", "suggested_links", "ambiguities", "source_checks"):
+                values = [*(previous.get(field) if isinstance(previous.get(field), list) else []), *(card.get(field) if isinstance(card.get(field), list) else [])]
+                previous[field] = list({json.dumps(value, sort_keys=True, ensure_ascii=False): value for value in values}.values())
+            from app.services.salience_service import strings, score
+            scores = [score(previous.get("business_confidence")), score(card.get("business_confidence"))]
+            previous["business_confidence"] = min(scores) if all(value is not None for value in scores) else None
+            previous["source_excerpts"] = strings([*strings(previous.get("source_excerpts")), *strings(card.get("source_excerpts")), previous.get("source_excerpt", ""), card.get("source_excerpt", "")])
             continue
         seen_labels.add(normalized)
         consolidated.append(card)
     return consolidated
 
 
-def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str]) -> dict:
+@atomic
+def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str], *, validation_policy: dict | None = None, extraction_mode: str | None = None) -> dict:
+    extraction_details = {}
+    if extraction_mode is not None:
+        from app.services.salience_service import prepare
+        raw_card, extraction_details = prepare(raw_card, extraction_mode)
     card_id = str(uuid.uuid4())
     timestamp = now_iso()
     main_effect = raw_card.get("main_effect") or {}
@@ -255,9 +285,10 @@ def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str]) -
             str(raw_card.get("archimate_mapping_status") or archimate_mapping.get("status"))
         ),
         "ontology_mapping_status": "to_map_later",
-        "source_excerpt": str(raw_card.get("source_excerpt") or document["content_text"][:700]),
+        "source_excerpt": str(raw_card.get("source_excerpt") or document["content_text"][:700])[:1200],
         "warnings": warnings,
         "graph_node_ids": {},
+        "extraction_details": extraction_details,
         "created_at": timestamp,
         "updated_at": timestamp,
     }
@@ -302,9 +333,23 @@ def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str]) -
             ),
         )
         row = conn.execute("SELECT * FROM extracted_cards WHERE id = ?", (card_id,)).fetchone()
-    return row_to_dict(row)
+    from app.services.coherence_service import bind_concepts, bind_relation, save_suggestions, refresh_states
+    with get_db() as conn:
+        conn.execute("UPDATE extracted_cards SET extraction_details = ? WHERE id = ?", (json.dumps(extraction_details, ensure_ascii=False), card_id))
+    card = {**row_to_dict(row), "extraction_details": extraction_details}
+    bind_concepts(card)
+    with get_db() as conn:
+        for edge in conn.execute("SELECT id FROM knowledge_edges WHERE json_extract(metadata, '$.card_id') = ?", (card_id,)):
+            bind_relation(card_id, edge["id"])
+    save_suggestions(card)
+    refresh_states()
+    if validation_policy is not None:
+        from app.services.validation_service import apply_to_new_card
+        apply_to_new_card(card_id, raw_card, validation_policy, warnings)
+    return get_card(card_id)
 
 
+@atomic
 def create_manual_card(request: ManualCardRequest) -> dict:
     document = get_document(request.document_id) if request.document_id else None
     if not document:
@@ -383,6 +428,34 @@ def _materialize_proposed_graph(document: dict, card: dict) -> dict[str, Any]:
     )
     _append_dedupe_suggestions(card, card["main_effect"]["label"], effect)
     node_ids["effect"] = effect["id"]
+    if card.get("extraction_details", {}).get("managed"):
+        node_ids["theme"] = ""
+    else:
+        node_ids["theme"] = _materialize_theme(document, card, effect["id"])
+    for field, node_type, relation in [
+        ("objects", "object", "concerne"),
+        ("actions", "action", "déclenche"),
+        ("conditions", "condition", "nécessite"),
+        ("tasks", "task", "se décompose en"),
+    ]:
+        for label in card[field]:
+            proposal = next((item for item in card.get("extraction_details", {}).get("concepts", []) if item["role"] == field and item["label"] == label), {})
+            node = graph_service.create_node(KnowledgeNodeIn(
+                label=label, type=node_type, level="unknown", status="proposed", confidence=card["confidence"], source_ids=source_ids,
+                description=proposal.get("reason", ""),
+                **graph_service.default_semantic_fields_for_node(node_type=node_type, label=label, document_type=document.get("file_type", "")),
+                metadata={"card_id": card["id"], "origin": "import", "source_excerpt": proposal.get("source_excerpt", card["source_excerpt"])},
+            ))
+            _append_dedupe_suggestions(card, label, node)
+            node_ids[field].append(node["id"])
+            graph_service.create_edge(KnowledgeEdgeIn(source_node_id=effect["id"], target_node_id=node["id"], relation_type=relation,
+                label=relation, status="proposed", confidence=card["confidence"], source_ids=source_ids,
+                metadata={"card_id": card["id"], "origin": "import"}))
+    return node_ids
+
+
+def _materialize_theme(document: dict, card: dict, effect_id: str) -> str:
+    source_ids = [document["id"]]
     theme = graph_service.create_node(
         KnowledgeNodeIn(
             label=card["theme_label"],
@@ -400,10 +473,9 @@ def _materialize_proposed_graph(document: dict, card: dict) -> dict[str, Any]:
             metadata={"card_id": card["id"], "origin": "import"},
         )
     )
-    node_ids["theme"] = theme["id"]
     graph_service.create_edge(
         KnowledgeEdgeIn(
-            source_node_id=effect["id"],
+            source_node_id=effect_id,
             target_node_id=theme["id"],
             relation_type="concerne",
             label="concerne",
@@ -413,59 +485,7 @@ def _materialize_proposed_graph(document: dict, card: dict) -> dict[str, Any]:
             metadata={"card_id": card["id"], "origin": "import"},
         )
     )
-    for field, node_type, relation in [
-        ("objects", "object", "concerne"),
-        ("actions", "action", "déclenche"),
-        ("conditions", "condition", "nécessite"),
-        ("tasks", "task", "se décompose en"),
-    ]:
-        for label in card[field]:
-            node = graph_service.create_node(
-                KnowledgeNodeIn(
-                    label=label,
-                    type=node_type,
-                    level="unknown",
-                    status="proposed",
-                    confidence=card["confidence"],
-                    source_ids=source_ids,
-                    **graph_service.default_semantic_fields_for_node(
-                        node_type=node_type,
-                        label=label,
-                        document_type=document.get("file_type", ""),
-                    ),
-                    metadata={"card_id": card["id"], "origin": "import"},
-                )
-            )
-            _append_dedupe_suggestions(card, label, node)
-            node_ids[field].append(node["id"])
-            graph_service.create_edge(
-                KnowledgeEdgeIn(
-                    source_node_id=effect["id"],
-                    target_node_id=node["id"],
-                    relation_type=relation,
-                    label=relation,
-                    status="proposed",
-                    confidence=card["confidence"],
-                    source_ids=source_ids,
-                    metadata={"card_id": card["id"], "origin": "import"},
-                )
-            )
-    for suggested in card["suggested_links"]:
-        target_id = suggested.get("target_existing_node_id")
-        if target_id:
-            graph_service.create_edge(
-                KnowledgeEdgeIn(
-                    source_node_id=effect["id"],
-                    target_node_id=target_id,
-                    relation_type=suggested.get("relation_type") or "proche de",
-                    label=suggested.get("relation_type") or "proche de",
-                    status="to_confirm",
-                    confidence=_confidence(suggested.get("confidence")),
-                    source_ids=source_ids,
-                    metadata={"card_id": card["id"], "reason": suggested.get("reason", ""), "origin": "import"},
-                )
-            )
-    return node_ids
+    return theme["id"]
 
 
 def _append_dedupe_suggestions(card: dict, incoming_label: str, node: dict) -> None:
@@ -473,6 +493,8 @@ def _append_dedupe_suggestions(card: dict, incoming_label: str, node: dict) -> N
     if not dedupe:
         return
     for candidate in dedupe.get("candidates", []):
+        if candidate["id"] == node["id"]:
+            continue
         card["suggested_links"].append(
             {
                 "source_label": incoming_label,
@@ -488,10 +510,19 @@ def _append_dedupe_suggestions(card: dict, incoming_label: str, node: dict) -> N
 def list_cards() -> list[dict]:
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM extracted_cards ORDER BY created_at DESC").fetchall()
-    return rows_to_dicts(rows)
+    from app.services.coherence_service import suggestions_for_card
+    cards = rows_to_dicts(rows)
+    for card in cards:
+        card["suggested_links"] = suggestions_for_card(card["id"])
+    return cards
 
 
 def get_card(card_id: str) -> dict | None:
     with get_db() as conn:
         row = conn.execute("SELECT * FROM extracted_cards WHERE id = ?", (card_id,)).fetchone()
-    return row_to_dict(row) if row else None
+    if not row:
+        return None
+    from app.services.coherence_service import suggestions_for_card
+    card = row_to_dict(row)
+    card["suggested_links"] = suggestions_for_card(card_id)
+    return card

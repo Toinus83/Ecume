@@ -6,7 +6,8 @@ from pathlib import Path
 import zipfile
 
 from app.config import EXPORT_DIR
-from app.database.db import get_db, now_iso
+from app.database.db import atomic, get_db, now_iso
+from app.services.coherence_service import is_valid, suggestions_for_card, validated_graph
 from app.services.serialization import row_to_dict, rows_to_dicts
 
 
@@ -21,21 +22,25 @@ RELATION_DESCRIPTIONS = {
 }
 
 
-def export_json() -> Path:
+def export_json(scope: str = "validated") -> Path:
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = EXPORT_DIR / "ecume_export.json"
-    payload = _complete_export_payload()
+    payload = _complete_export_payload(scope)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
-def export_jsonld() -> Path:
+def export_jsonld(scope: str = "validated") -> Path:
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = EXPORT_DIR / "ecume_export.jsonld"
-    payload = _complete_export_payload()
+    payload = _complete_export_payload(scope)
     jsonld = {
         "@context": {
+            "@version": 1.1,
+            "@vocab": "urn:ecume:vocab:",
             "ecume": "urn:ecume:vocab:",
+            "metadata": {"@id": "ecume:metadata", "@type": "@json"},
+            "record": {"@id": "ecume:record", "@type": "@json"},
             "id": "@id",
             "type": "@type",
             "label": "ecume:label",
@@ -70,6 +75,12 @@ def export_jsonld() -> Path:
             "fileType": doc["file_type"],
             "createdAt": doc["created_at"],
             "metadata": doc["metadata"],
+            "contentText": doc["content_text"],
+            "sourceStatus": doc.get("source_status", "retained"),
+            "contentHash": doc.get("content_hash", ""),
+            "sourcePurgedAt": doc.get("source_purged_at"),
+            "deletedAt": doc.get("deleted_at"),
+            "record": doc,
         }
         for doc in payload["documents"]
     )
@@ -86,6 +97,9 @@ def export_jsonld() -> Path:
             "confidence": node["confidence"],
             "businessCategory": node.get("business_category", "non_qualifie"),
             "businessValidationStatus": node.get("business_validation_status", "proposed"),
+            "businessConfidence": node.get("business_confidence"),
+            "validationDecision": {"record": node.get("validation_decision", {})},
+            "orphanStatus": node.get("orphan_status", ""),
             "businessJustification": node.get("business_justification", ""),
             "archimateMapping": node.get("archimate_mapping", {}),
             "archimateMappingStatus": node.get("archimate_mapping_status", ""),
@@ -97,6 +111,7 @@ def export_jsonld() -> Path:
             "createdAt": node["created_at"],
             "updatedAt": node["updated_at"],
             "metadata": node["metadata"],
+            "sourceExcerpt": node["source_excerpt"],
         }
         for node in payload["nodes"]
     )
@@ -114,6 +129,9 @@ def export_jsonld() -> Path:
             "targetLabel": edge["target_label"],
             "status": edge["status"],
             "confidence": edge["confidence"],
+            "businessValidationStatus": edge.get("business_validation_status", "proposed"),
+            "businessConfidence": edge.get("business_confidence"),
+            "validationDecision": {"record": edge.get("validation_decision", {})},
             "sourceDocuments": [
                 f"urn:ecume:document:{source_id}" for source_id in edge["source_ids"]
             ],
@@ -124,13 +142,18 @@ def export_jsonld() -> Path:
         }
         for edge in payload["edges"]
     )
+    for kind, records in (("card", payload["cards"]), ("change", payload["changelog"])):
+        jsonld["@graph"].extend({"@id": f"urn:ecume:{kind}:{record['id']}",
+                                "@type": f"ecume:{kind}", "record": record} for record in records)
+    jsonld["@graph"].append({"@id": "urn:ecume:export:manifest", "@type": "ecume:Export",
+                            "record": {"export_metadata": payload["export_metadata"], "mappings": payload["mappings"]}})
     path.write_text(json.dumps(jsonld, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
-def export_csv_bundle() -> Path:
+def export_csv_bundle(scope: str = "validated") -> Path:
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    payload = _complete_export_payload()
+    payload = _complete_export_payload(scope)
     nodes_path = EXPORT_DIR / "nodes.csv"
     edges_path = EXPORT_DIR / "edges.csv"
     documents_path = EXPORT_DIR / "documents.csv"
@@ -148,9 +171,9 @@ def export_csv_bundle() -> Path:
     return zip_path
 
 
-def export_memgraph_bundle() -> Path:
+def export_memgraph_bundle(scope: str = "validated") -> Path:
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    payload = _complete_export_payload()
+    payload = _complete_export_payload(scope)
     nodes_path = EXPORT_DIR / "memgraph_nodes.csv"
     edges_path = EXPORT_DIR / "memgraph_edges.csv"
     cypher_path = EXPORT_DIR / "memgraph_import.cypher"
@@ -207,6 +230,9 @@ def export_archimate_candidates_json() -> Path:
             or node.get("business_validation_status") == "rejected"
             or node.get("archimate_mapping_status") == "rejected"
             or mapping.get("status") == "rejected"
+            or node.get("archimate_mapping_status") == "to_review"
+            or mapping.get("status") == "to_review"
+            or not is_valid(node)
         ):
             continue
         candidates.append(
@@ -226,8 +252,8 @@ def export_archimate_candidates_json() -> Path:
                 "ontology_mapping_status": node.get("ontology_mapping_status", "to_map_later"),
                 "export_decision": {
                     "selected_for_archimate_export": mapping.get("confidence", 0) >= 0.7
-                    and node.get("business_validation_status") == "validated_by_user",
-                    "reason": "Selection automatique prudente : concept valide metier et mapping candidat >= 0.70.",
+                    and mapping.get("status") == "validated_by_architect",
+                    "reason": "La validation metier conserve un candidat ; la selection centrale exige une validation architecture explicite.",
                 },
             }
         )
@@ -246,13 +272,21 @@ def export_archimate_candidates_json() -> Path:
     return path
 
 
-def _complete_export_payload() -> dict:
+@atomic
+def _complete_export_payload(scope: str = "validated") -> dict:
+    if scope not in {"validated", "all"}:
+        raise ValueError("Portee d'export invalide.")
     documents = _list_documents()
     cards = _list_cards()
     nodes = _list_nodes()
     edges = _list_edges()
     changelog = _list_changelog()
     aliases_by_node = _aliases_by_node()
+    for card in cards:
+        card["suggested_links"] = suggestions_for_card(card["id"])
+    if scope == "validated":
+        cards = [card for card in cards if is_valid(card)]
+        nodes, edges = validated_graph(nodes, edges)
     doc_by_id = {doc["id"]: doc for doc in documents}
     node_by_id = {node["id"]: node for node in nodes}
     card_by_id = {card["id"]: card for card in cards}
@@ -266,7 +300,9 @@ def _complete_export_payload() -> dict:
     return {
         "export_metadata": {
             "format": "ECUME complete knowledge export",
-            "version": "0.2.0",
+            "version": "0.3.0",
+            "scope": scope,
+            "history_note": "Le changelog contient des etats historiques, pas des connaissances actuellement validees.",
             "generated_at": now_iso(),
             "relation_types": RELATION_DESCRIPTIONS,
             "stable_uri_patterns": {
@@ -385,7 +421,9 @@ def _card_summary(card: dict | None) -> dict | None:
 def _list_documents() -> list[dict]:
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM source_documents ORDER BY created_at ASC").fetchall()
+        references = conn.execute("SELECT * FROM document_references ORDER BY created_at ASC").fetchall()
     documents = rows_to_dicts(rows)
+    documents.extend({**row_to_dict(row), "source_status": "deleted", "content_text": ""} for row in references)
     for doc in documents:
         content = doc.get("content_text", "")
         doc["uri"] = f"urn:ecume:document:{doc['id']}"
@@ -463,7 +501,7 @@ def _write_nodes(path: Path, nodes: list[dict]) -> None:
         "source_excerpt",
         "metadata",
     ]
-    _write_csv(path, fields, nodes)
+    _write_csv(path, fields + ["business_confidence", "validation_decision", "orphan_status"], nodes)
 
 
 def _write_edges(path: Path, edges: list[dict]) -> None:
@@ -487,7 +525,7 @@ def _write_edges(path: Path, edges: list[dict]) -> None:
         "origin_card_id",
         "metadata",
     ]
-    _write_csv(path, fields, edges)
+    _write_csv(path, fields + ["business_validation_status", "business_confidence", "validation_decision"], edges)
 
 
 def _write_documents(path: Path, documents: list[dict]) -> None:
@@ -502,7 +540,7 @@ def _write_documents(path: Path, documents: list[dict]) -> None:
         "uri",
         "metadata",
     ]
-    _write_csv(path, fields, documents)
+    _write_csv(path, fields + ["source_status", "content_hash", "content_length", "source_purged_at", "deleted_at", "retention_policy"], documents)
 
 
 def _write_cards(path: Path, cards: list[dict]) -> None:
@@ -531,7 +569,7 @@ def _write_cards(path: Path, cards: list[dict]) -> None:
         "updated_at",
         "uri",
     ]
-    _write_csv(path, fields, cards)
+    _write_csv(path, fields + ["business_confidence", "validation_decision"], cards)
 
 
 def _write_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
@@ -563,6 +601,9 @@ SET n.label = row.label,
     n.type = row.type,
     n.business_category = row.business_category,
     n.business_validation_status = row.business_validation_status,
+    n.business_confidence = row.business_confidence,
+    n.validation_decision = row.validation_decision,
+    n.orphan_status = row.orphan_status,
     n.business_justification = row.business_justification,
     n.archimate_mapping = row.archimate_mapping,
     n.archimate_mapping_status = row.archimate_mapping_status,
@@ -582,13 +623,16 @@ SET n.label = row.label,
 
 LOAD CSV FROM "memgraph_edges.csv" WITH HEADER AS row
 MATCH (source:EcumeNode {id: row.source_node_id}), (target:EcumeNode {id: row.target_node_id})
-CREATE (source)-[r:ECUME_RELATION {id: row.id}]->(target)
+MERGE (source)-[r:ECUME_RELATION {id: row.id}]->(target)
 SET r.relation_type = row.relation_type,
     r.label = row.label,
     r.description = row.description,
     r.direction = row.direction,
     r.status = row.status,
     r.confidence = row.confidence,
+    r.business_validation_status = row.business_validation_status,
+    r.business_confidence = row.business_confidence,
+    r.validation_decision = row.validation_decision,
     r.source_ids = row.source_ids,
     r.source_titles = row.source_titles,
     r.created_at = row.created_at,

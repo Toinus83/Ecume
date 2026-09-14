@@ -1,12 +1,12 @@
 import type { CardStatus, Confidence, Level } from "../types";
 
 const statusLabels: Record<CardStatus, string> = {
-  proposed: "propose",
-  accepted: "valide",
-  accepted_orphan: "orphelin accepte",
-  linked: "rattache",
-  to_confirm: "a confirmer",
-  rejected: "rejete"
+  proposed: "À traiter",
+  accepted: "Validé",
+  accepted_orphan: "Validé sans rattachement",
+  linked: "Rattaché",
+  to_confirm: "À revoir",
+  rejected: "Rejeté"
 };
 
 const levelLabels: Record<Level, string> = {
@@ -24,7 +24,7 @@ const confidenceLabels: Record<Confidence, string> = {
 };
 
 export function StatusPill({ value }: { value: CardStatus }) {
-  return <span className={`pill status-${value}`}>{statusLabels[value]}</span>;
+  return <span className={`pill status-${value}`} title={value === "to_confirm" ? "Un doute ou une information manquante demande une vérification." : undefined}>{statusLabels[value]}</span>;
 }
 
 export function LevelPill({ value }: { value: Level }) {

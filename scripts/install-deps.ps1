@@ -66,18 +66,20 @@ try {
         $createdVenv = $true
     }
 
-    if ($Force -or $createdVenv) {
+    $requirements = if ($WithDev) { "requirements-dev.txt" } else { "requirements.txt" }
+    $needsInstall = $Force -or $createdVenv
+    if (-not $needsInstall) {
+        & ".\.venv\Scripts\python.exe" (Join-Path $Root "scripts\check-python-deps.py") $requirements
+        $needsInstall = $LASTEXITCODE -ne 0
+    }
+    if ($needsInstall) {
         Write-Host "Installation des dependances Python..." -ForegroundColor Cyan
-        Invoke-Native ".\.venv\Scripts\python.exe" "-m" "pip" "install" "--upgrade" "pip"
-        Invoke-Native ".\.venv\Scripts\python.exe" "-m" "pip" "install" "-r" "requirements.txt"
-        if ($WithDev -and (Test-Path "requirements-dev.txt")) {
-            Invoke-Native ".\.venv\Scripts\python.exe" "-m" "pip" "install" "-r" "requirements-dev.txt"
+        if ($createdVenv) {
+            Invoke-Native ".\.venv\Scripts\python.exe" "-m" "pip" "install" "--upgrade" "pip"
         }
+        Invoke-Native ".\.venv\Scripts\python.exe" "-m" "pip" "install" "-r" $requirements
     } else {
-        Write-Host "Environnement Python deja present. Passage ignore." -ForegroundColor Green
-        if ($WithDev) {
-            Write-Host "Pour ajouter les dependances de test a un environnement existant, relance avec -Force -WithDev." -ForegroundColor Yellow
-        }
+        Write-Host "Dependances Python verifiees et deja presentes. Installation ignoree." -ForegroundColor Green
     }
 } finally {
     Pop-Location

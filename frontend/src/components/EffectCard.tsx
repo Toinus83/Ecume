@@ -1,30 +1,33 @@
 import {
   Check,
-  ChevronDown,
-  ChevronRight,
   Eye,
   GitMerge,
   Link2,
   Pencil,
   Save,
   Trash2,
-  X
+  X,
+  MoreHorizontal
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { BusinessCategory, ExtractedCard, KnowledgeNode, Level, SuggestedLink } from "../types";
-import { ConfidencePill, LevelPill, StatusPill } from "./StatusPill";
+import { LevelPill, StatusPill } from "./StatusPill";
 import TagList from "./TagList";
+import SuggestionRepair from "./SuggestionRepair";
+import ConceptSearch from "./ConceptSearch";
+import { ActionError, Hint } from "./ContextHelp";
+import CardConcepts from "./CardConcepts";
+import EchoMappings from "./EchoMappings";
 
 interface Props {
   card: ExtractedCard;
   allCards: ExtractedCard[];
-  effectNodes: KnowledgeNode[];
-  onChanged: () => void;
+  onChanged: (updated?: ExtractedCard) => void;
   onOpenGraph: () => void;
 }
 
-const levels: Array<{ value: Level; label: string; help: string }> = [
+export const levels: Array<{ value: Level; label: string; help: string }> = [
   { value: "strategic", label: "strategique", help: "Finalite generale, orientation ou ambition de haut niveau." },
   { value: "operational", label: "operatif", help: "Effet attendu dans la conduite d'une mission ou d'un processus." },
   { value: "tactical", label: "tactique", help: "Effet local, coordination terrain ou decision proche de l'action." },
@@ -32,7 +35,7 @@ const levels: Array<{ value: Level; label: string; help: string }> = [
   { value: "unknown", label: "a preciser", help: "ECUME n'a pas encore assez d'indices." }
 ];
 
-const businessCategories: Array<{ value: BusinessCategory; label: string; questionLabel: string; tooltip: string }> = [
+export const businessCategories: Array<{ value: BusinessCategory; label: string; questionLabel: string; tooltip: string }> = [
   {
     value: "resultat_recherche",
     label: "resultat recherche",
@@ -131,12 +134,11 @@ function confidencePercent(value?: number) {
   return Math.round(Math.max(0, Math.min(1, value ?? 0)) * 100);
 }
 
-export default function EffectCard({ card, allCards, effectNodes, onChanged, onOpenGraph }: Props) {
+export default function EffectCard({ card, allCards, onChanged, onOpenGraph }: Props) {
   const [editing, setEditing] = useState(false);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [secondaryOpen, setSecondaryOpen] = useState(false);
-  const [ignoredSuggestions, setIgnoredSuggestions] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState({
@@ -152,25 +154,53 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
     tasks: card.tasks.join(", ")
   });
   const [mergeTarget, setMergeTarget] = useState("");
+  useEffect(() => {
+    if (!editing) setDraft({theme_label: card.theme_label, effect_label: card.main_effect.label,
+      effect_description: card.main_effect.description, level: card.level, business_category: card.business_category,
+      business_justification: card.business_justification, objects: card.objects.join(", "), actions: card.actions.join(", "),
+      conditions: card.conditions.join(", "), tasks: card.tasks.join(", ")});
+  }, [card.updated_at, editing]);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const [parentTarget, setParentTarget] = useState("");
+  const [parentNode, setParentNode] = useState<KnowledgeNode | null>(null);
+  const [mergeQuery, setMergeQuery] = useState("");
+  const [linksOpen, setLinksOpen] = useState(false);
+  const [linkFilter, setLinkFilter] = useState("important");
+  const [linkLimit, setLinkLimit] = useState(8);
+  const [repairId, setRepairId] = useState<string | null>(null);
+  const [suggestionNotice, setSuggestionNotice] = useState("");
   const sortedCards = [...allCards]
     .filter((item) => item.id !== card.id)
     .sort((left, right) => scoreCard(right) - scoreCard(left) || left.main_effect.label.localeCompare(right.main_effect.label, "fr"));
-  const sortedEffectNodes = [...effectNodes]
-    .filter((node) => node.id !== card.graph_node_ids.effect)
-    .sort((left, right) => scoreNode(right) - scoreNode(left) || left.label.localeCompare(right.label, "fr"));
-  const visibleSuggestions = card.suggested_links
-    .map((link, index) => ({ link, index }))
-    .filter((item) => !ignoredSuggestions.has(item.index));
+  function linkGroup(link: SuggestedLink) {
+    if (link.status === "accepted") return "accepted";
+    if (["ignored", "rejected"].includes(link.status)) return "ignored";
+    if (!link.can_accept) return "incomplete";
+    return typeof link.business_confidence === "number" && link.business_confidence >= .9 && link.status === "proposed" ? "supported" : "review";
+  }
+  const groups = [["supported", "Fiables (estimation)"], ["review", "À vérifier"], ["incomplete", "Incomplets"], ["ignored", "Ignorés / rejetés"], ["accepted", "Acceptés"]];
+  const principalIds = new Set([card.graph_node_ids.effect, ...(card.extraction_details?.concepts ?? []).filter(item => item.active && item.importance === "principal").map(item => item.node_id)]);
+  const important = card.suggested_links.filter(link => link.can_accept && link.status === "proposed" && principalIds.has(link.source_node_id ?? "") &&
+    (typeof link.business_confidence === "number" ? link.business_confidence >= .8 : !card.extraction_details?.managed && link.confidence === "high"))
+    .sort((a,b) => (b.business_confidence ?? 0) - (a.business_confidence ?? 0)).slice(0,3);
+  const importantIds = new Set(important.map(item => item.id));
+  const problems = card.suggested_links.filter(link => linkGroup(link) === "incomplete").length;
+  const otherCount = card.suggested_links.length - important.length - problems;
+  const visibleSuggestions = card.suggested_links.filter(link => linkFilter === "important" ? importantIds.has(link.id) :
+    linkFilter === "others" ? !importantIds.has(link.id) && linkGroup(link) !== "incomplete" : linkGroup(link) === linkFilter)
+    .sort((a,b) => groups.findIndex(([key]) => key === linkGroup(a)) - groups.findIndex(([key]) => key === linkGroup(b)) || (b.business_confidence ?? -1) - (a.business_confidence ?? -1));
+
 
   async function act(action: () => Promise<unknown>) {
     setBusy(true);
     setError("");
     try {
-      await action();
-      onChanged();
+      const result = await action();
+      onChanged(result && typeof result === "object" && "main_effect" in result ? result as ExtractedCard : undefined);
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action impossible");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -181,7 +211,7 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
   }
 
   async function save() {
-    await act(() =>
+    const saved = await act(() =>
       api.updateCard(card.id, {
         theme_label: draft.theme_label,
         level: draft.level,
@@ -204,7 +234,7 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
         ontology_mapping_status: "to_map_later"
       })
     );
-    setEditing(false);
+    if (saved) setEditing(false);
   }
 
   async function markToReview() {
@@ -240,8 +270,8 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
       api.createEdge({
         source_node_id: effectId,
         target_node_id: parentTarget,
-        relation_type: "contribue Ã ",
-        label: "contribue Ã ",
+        relation_type: "contribue à",
+        label: "contribue à",
         status: "to_confirm",
         confidence: "medium",
         source_ids: [card.document_id],
@@ -251,20 +281,12 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
   }
 
   async function acceptSuggestedLink(link: SuggestedLink) {
-    const effectId = card.graph_node_ids.effect;
-    if (!effectId || typeof effectId !== "string" || !link.target_existing_node_id) return;
-    await act(() =>
-      api.createEdge({
-        source_node_id: effectId,
-        target_node_id: link.target_existing_node_id,
-        relation_type: link.relation_type,
-        label: link.relation_type,
-        status: "to_confirm",
-        confidence: link.confidence,
-        source_ids: [card.document_id],
-        metadata: { card_id: card.id, origin: "user", reason: link.reason }
-      })
-    );
+    setSuggestionNotice("");
+    await act(async () => {
+      const result = await api.decideSuggestion(card.id, link.id, "accepted");
+      setSuggestionNotice(result.status === "accepted" ? "Rapprochement accepté." : result.invalid_reason || "Rapprochement à revoir. Actualisez la carte.");
+      return result;
+    });
   }
 
   async function deleteConcept(
@@ -274,28 +296,17 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
   ) {
     const nodeIds = card.graph_node_ids[field];
     const nodeId = Array.isArray(nodeIds) ? nodeIds[index] : undefined;
-    const ok = window.confirm(`Supprimer le concept "${label}" de la base et de cette carte ?`);
+    const ok = window.confirm(`Retirer "${label}" de cette carte ? Les autres cartes seront conservees.`);
     if (!ok) return;
-    await act(async () => {
-      if (nodeId) {
-        await api.deleteNode(nodeId);
-      }
-      const nextValues = card[field].filter((_, itemIndex) => itemIndex !== index);
-      await api.updateCard(card.id, { [field]: nextValues });
-    });
+    if (nodeId) await act(() => api.detachConcept(card.id, nodeId));
   }
 
   async function deleteMainEffect() {
-    const effectId = card.graph_node_ids.effect;
-    if (!effectId || typeof effectId !== "string") return;
     const ok = window.confirm(
-      `Supprimer l'effet principal "${card.main_effect.label}" de la base ? La carte passera en statut a confirmer.`
+      `Supprimer la carte "${card.main_effect.label}" ? Les concepts utilises ailleurs seront conserves.`
     );
     if (!ok) return;
-    await act(async () => {
-      await api.deleteNode(effectId);
-      await api.updateCard(card.id, { status: "to_confirm", validation_status: "to_confirm" });
-    });
+    await act(() => api.deleteCard(card.id));
   }
 
   function scoreCard(candidate: ExtractedCard) {
@@ -303,14 +314,6 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
     const candidateEffectId = candidate.graph_node_ids.effect;
     if (typeof candidateEffectId === "string" && suggestedIds.has(candidateEffectId)) return 100;
     return commonWords(card.main_effect.label, candidate.main_effect.label);
-  }
-
-  function scoreNode(candidate: KnowledgeNode) {
-    const direct = card.suggested_links.find((link) => link.target_existing_node_id === candidate.id);
-    if (direct?.confidence === "high") return 100;
-    if (direct?.confidence === "medium") return 80;
-    if (direct) return 60;
-    return commonWords(card.main_effect.label, candidate.label);
   }
 
   function commonWords(left: string, right: string) {
@@ -321,6 +324,25 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
 
   const selectedCategory = category(card.business_category);
   const selectedLevel = level(card.level);
+  const validated = ["accepted", "accepted_orphan"].includes(card.status);
+
+  const primaryActions = (<div className="card-actions primary-actions">
+        {editing ? (
+          <>
+            <button onClick={save} disabled={busy}><Save size={16} />Enregistrer les corrections</button>
+            <button className="ghost-button" disabled={busy} onClick={() => setEditing(false)}><X size={16} />Annuler</button>
+          </>
+        ) : (
+          <>
+            {!validated && <button onClick={() => act(() => api.acceptCard(card.id))} disabled={busy}><Check size={16} />Valider</button>}
+            <button className="ghost-button" disabled={busy} onClick={() => setEditing(true)}><Pencil size={16} />{validated ? "Modifier" : "Corriger"}</button>
+            <button className="ghost-button" onClick={markToReview} disabled={busy}>À revoir</button>
+          </>
+        )}
+        <button className="ghost-button icon-button" title="Autres actions" aria-label="Autres actions" aria-expanded={secondaryOpen} onClick={() => setSecondaryOpen(!secondaryOpen)}>
+          <MoreHorizontal size={16} />
+        </button>
+      </div>);
 
   return (
     <article className="effect-card review-card">
@@ -330,9 +352,8 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
           <h2>{card.main_effect.label}</h2>
         </div>
         <div className="pill-row">
-          <StatusPill value={card.status} />
+          {card.business_validation_status === "auto_validated" ? <span className="pill status-accepted" title="Proposition suffisamment fiable selon le mode choisi.">Auto-validée</span> : <StatusPill value={card.status} />}
           <LevelPill value={card.level} />
-          <ConfidencePill value={card.confidence} />
         </div>
       </div>
 
@@ -404,50 +425,75 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
         <>
           <section className="review-section">
             <span>ECUME a compris</span>
-            <p>{card.main_effect.description || "Effet propose a preciser."}</p>
+            <p className={summaryOpen || card.main_effect.description.length <= 200 ? "" : "card-summary-clamped"}>{card.main_effect.description || "Effet propose a preciser."}</p>
+            {card.main_effect.description.length > 200 && <button className="ghost-button summary-toggle" onClick={() => setSummaryOpen(!summaryOpen)}>{summaryOpen ? "Réduire la synthèse" : "Lire la synthèse complète"}</button>}
           </section>
+
+          <CardConcepts card={card} busy={busy} onDecision={(id, action) => void act(() => api.decideConcept(card.id, id, action))} />
 
           <section className="review-section review-decision" title={selectedCategory.tooltip}>
-            <span>A valider</span>
-            <p>Est-ce bien {selectedCategory.questionLabel} de niveau {selectedLevel.label} ?</p>
-            <small>{card.business_justification || "Qualification proposee automatiquement par ECUME."}</small>
+            <span>{["accepted", "accepted_orphan"].includes(card.status) ? "Qualification validée" : "À valider"}</span>
+            <p>{["accepted", "accepted_orphan"].includes(card.status) ? `${selectedCategory.label} · ${selectedLevel.label}` : `Est-ce bien ${selectedCategory.questionLabel} de niveau ${selectedLevel.label} ?`}</p>
+
           </section>
 
-          <section className="review-section review-impact">
-            <span>Ce que cela alimente</span>
-            <p>Votre validation aide ECUME a construire progressivement le graphe des usages metier.</p>
-          </section>
-
+          {primaryActions}
+          {!card.extraction_details?.managed && <details className="card-disclosure"><summary>Éléments associés ({card.objects.length + card.actions.length + card.conditions.length + card.tasks.length})</summary>
           <div className="tag-layout readable-tags">
-            <TagList title="Ce dont on parle" items={card.objects} disabled={busy} onDelete={(item, index) => deleteConcept("objects", item, index)} />
-            <TagList title="Ce qui est fait" items={card.actions} disabled={busy} onDelete={(item, index) => deleteConcept("actions", item, index)} />
-            <TagList title="Dans quel cas" items={card.conditions} disabled={busy} onDelete={(item, index) => deleteConcept("conditions", item, index)} />
-            <TagList title="Realise concretement" items={card.tasks} disabled={busy} onDelete={(item, index) => deleteConcept("tasks", item, index)} />
+            <TagList title="Ce dont on parle" items={card.objects} disabled={busy} onDelete={validated ? undefined : (item, index) => deleteConcept("objects", item, index)} />
+            <TagList title="Ce qui est fait" items={card.actions} disabled={busy} onDelete={validated ? undefined : (item, index) => deleteConcept("actions", item, index)} />
+            <TagList title="Dans quel cas" items={card.conditions} disabled={busy} onDelete={validated ? undefined : (item, index) => deleteConcept("conditions", item, index)} />
+            <TagList title="Realise concretement" items={card.tasks} disabled={busy} onDelete={validated ? undefined : (item, index) => deleteConcept("tasks", item, index)} />
           </div>
 
-          {visibleSuggestions.length > 0 && (
-            <section className="suggestions readable-suggestions">
-              <span>Rapprochements proposes</span>
-              {visibleSuggestions.map(({ link, index }) => (
-                <div className="suggestion-line" key={`${link.target_existing_node_id}-${index}`}>
-                  <p>
-                    {link.source_label} <b>{link.relation_type}</b> {link.target_label ?? link.target_existing_node_id}
-                  </p>
-                  {link.reason && <small>{link.reason}</small>}
-                  <div>
-                    <button disabled={busy || !link.target_existing_node_id} onClick={() => acceptSuggestedLink(link)}>Accepter</button>
-                    <button className="ghost-button" disabled={busy} onClick={() => setIgnoredSuggestions(new Set(ignoredSuggestions).add(index))}>Ignorer</button>
-                    <button className="ghost-button" disabled={busy} onClick={markToReview}>A revoir</button>
+          </details>}
+          <CardConcepts details card={card} busy={busy} onDecision={(id, action) => void act(() => api.decideConcept(card.id, id, action))} />
+          {validated && <EchoMappings nodes={[{id:typeof card.graph_node_ids.effect === "string" ? card.graph_node_ids.effect : "",label:card.main_effect.label},
+            ...(["objects","actions","conditions","tasks"] as const).flatMap(role=>{
+              const ids = card.graph_node_ids[role];
+              return card[role].map((label,index)=>({id:Array.isArray(ids) ? ids[index] : "",label}));
+            })].filter((node,index,all)=>!!node.id && all.findIndex(other=>other.id===node.id)===index)} />}
+          {card.suggested_links.length > 0 && <section className="suggestions-summary">
+            <div className="section-title"><span>{important.length} rapprochements importants · {otherCount} autres masqués <Hint label="Rapprochement">Les liens complets les plus utiles sont présentés en premier.</Hint></span>
+              {important.length > 0 && <button className="ghost-button" aria-expanded={linksOpen && linkFilter === "important"} onClick={() => { setLinksOpen(!linksOpen || linkFilter !== "important"); setLinkFilter("important"); setRepairId(null); }}>Examiner les rapprochements</button>}</div>
+            <div className="button-row related-disclosures">{otherCount > 0 && <button className="ghost-button" onClick={() => { setLinksOpen(!linksOpen || linkFilter !== "others"); setLinkFilter("others"); setLinkLimit(8); setRepairId(null); }}>Voir les autres</button>}
+              {problems > 0 && <button className="ghost-button" onClick={() => { setLinksOpen(!linksOpen || linkFilter !== "incomplete"); setLinkFilter("incomplete"); setLinkLimit(8); setRepairId(null); }}>À réparer si nécessaire ({problems})</button>}</div>
+            {linksOpen && <div className="suggestions-panel">
+              {linkFilter === "incomplete" && <p className="quiet-note">ECUME a détecté une idée de lien, mais il manque un concept exploitable ou une relation à préciser.</p>}
+              <label>Afficher<select value={linkFilter} onChange={e => { setLinkFilter(e.target.value); setLinkLimit(8); setRepairId(null); }}>
+                <option value="important">Rapprochements importants ({important.length})</option><option value="others">Autres rapprochements possibles ({otherCount})</option>{groups.map(([key,label]) => <option key={key} value={key}>{label} ({card.suggested_links.filter(link => linkGroup(link) === key).length})</option>)}
+              </select></label>
+              {suggestionNotice && <p role="status">{suggestionNotice}</p>}
+              {visibleSuggestions.slice(0,linkLimit).map(link => <div className="suggestion-line" key={link.id}>
+                <small>{groups.find(([key]) => key === linkGroup(link))?.[1]}</small>
+                <p><strong>{link.source_label || "Concept source à retrouver"}</strong> {link.relation_type} <strong>{link.target_label || "Concept cible à retrouver"}</strong></p>
+                {link.reason && <p className="quiet-note">{link.reason.length > 240 ? link.reason.slice(0,240) + "…" : link.reason}</p>}
+                {typeof link.business_confidence === "number" && <p className="quiet-note">Confiance estimée : {Math.round(link.business_confidence * 100)} % <Hint label="Score métier">Estimation sur la compréhension métier. Ce n’est pas une preuve.</Hint></p>}
+                {["accepted", "ignored"].includes(linkGroup(link)) ? <p className="quiet-note">{{accepted:"Accepté",ignored:"Ignoré",rejected:"Rejeté"}[link.status as "accepted"]}</p> : <>
+                  {!link.can_accept && <p className="quiet-note">{link.invalid_reason || "Lien incomplet : un concept doit être retrouvé."}</p>}
+                  <div className="button-row">
+                    {link.can_accept && <button disabled={busy} onClick={() => acceptSuggestedLink(link)}>Accepter</button>}
+                    <button className="ghost-button" disabled={busy} onClick={() => setRepairId(repairId === link.id ? null : link.id)}><Pencil size={14} />{link.can_accept ? "Modifier" : link.source_node_id ? "Choisir une cible" : "Corriger le lien"}</button>
+                    <button className="ghost-button" disabled={busy} onClick={() => act(() => api.decideSuggestion(card.id, link.id, "ignored"))}>Ignorer</button>
+                    {!link.can_accept && <button className="ghost-button" disabled={busy} onClick={() => act(() => api.decideSuggestion(card.id, link.id, "to_review"))}>À revoir</button>}
                   </div>
-                </div>
-              ))}
-            </section>
-          )}
+                  {repairId === link.id && <SuggestionRepair card={card} link={link} onCancel={() => setRepairId(null)} onDone={() => { setRepairId(null); setSuggestionNotice("Lien corrigé, en attente d’acceptation."); onChanged(); }} />}
+                </>}
+              </div>)}
+              {visibleSuggestions.length > linkLimit && <button className="ghost-button" onClick={() => setLinkLimit(linkLimit + 8)}>Voir plus de rapprochements</button>}
+            </div>}
+          </section>}
         </>
       )}
 
+      {editing && primaryActions}
       {advancedOpen && (
         <div className="advanced-panel">
+          {card.business_justification && <section><h4>Pourquoi cette qualification ?</h4><p>{card.business_justification}</p></section>}
+          <section><h4>Auto-validation</h4><p>{card.business_confidence == null ? "Aucun score métier numérique : cette carte ne peut pas être auto-validée à partir de ses données actuelles." : `Score métier estimé : ${Math.round(card.business_confidence * 100)} %.`}</p>
+            <p>{card.validation_decision?.origin === "user" ? "Décision humaine conservée." : card.validation_decision?.reason === "strict_mode" ? "Analyse en mode Strict : validation manuelle requise." : card.validation_decision?.reason === "insufficient_score" ? "Score inférieur au seuil d'auto-validation utilisé." : !card.validation_decision?.origin ? "Aucune décision automatique enregistrée pour cette carte historique." : "Décision automatique enregistrée avec les réglages de l'analyse."}</p>
+            {Array.isArray(card.validation_decision?.blockers) && card.validation_decision.blockers.length > 0 && <p>Points à vérifier : {card.validation_decision.blockers.join(" ; ")}</p>}
+          </section>
           <section>
             <span>Traduction architecture</span>
             <dl>
@@ -478,26 +524,7 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
         </div>
       )}
       {sourceOpen && <pre className="source-panel">{card.source_excerpt}</pre>}
-      {error && <p className="error">{error}</p>}
-
-      <div className="card-actions primary-actions">
-        {editing ? (
-          <>
-            <button onClick={save} disabled={busy}><Save size={16} />Enregistrer les corrections</button>
-            <button className="ghost-button" onClick={() => setEditing(false)}><X size={16} />Annuler</button>
-          </>
-        ) : (
-          <>
-            <button onClick={() => act(() => api.acceptCard(card.id))} disabled={busy}><Check size={16} />Valider la proposition</button>
-            <button className="ghost-button" onClick={() => setEditing(true)}><Pencil size={16} />Corriger</button>
-            <button className="ghost-button" onClick={markToReview} disabled={busy}>A revoir</button>
-          </>
-        )}
-        <button className="ghost-button" onClick={() => setSecondaryOpen(!secondaryOpen)}>
-          {secondaryOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          Actions
-        </button>
-      </div>
+      <ActionError error={error} />
 
       {secondaryOpen && (
         <>
@@ -505,7 +532,7 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
             <button className="ghost-button" onClick={() => setSourceOpen(!sourceOpen)}><Eye size={16} />Voir sources</button>
             <button className="ghost-button" onClick={onOpenGraph}><Link2 size={16} />Voir graphe</button>
             <button className="ghost-button" onClick={() => setAdvancedOpen(!advancedOpen)}>Details avances</button>
-            <button onClick={() => act(() => api.acceptCard(card.id, true))} disabled={busy}>Orphelin OK</button>
+            <button onClick={() => act(() => api.acceptCard(card.id, true))} disabled={busy}>Accepter sans rattachement</button>
             <button className="danger-button" onClick={rejectCard} disabled={busy}>Rejeter</button>
             <button className="danger-button" onClick={deleteMainEffect} disabled={busy}><Trash2 size={16} />Supprimer</button>
           </div>
@@ -513,24 +540,19 @@ export default function EffectCard({ card, allCards, effectNodes, onChanged, onO
           <div className="relationship-tools">
             <label>
               <GitMerge size={15} />
+              <input aria-label="Rechercher une carte à fusionner" placeholder="Rechercher une carte" value={mergeQuery} onChange={e => { setMergeQuery(e.target.value); setMergeTarget(""); }} />
               <select value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)}>
                 <option value="">Fusionner avec...</option>
-                {sortedCards.map((item) => (
+                {sortedCards.filter(item => mergeQuery.trim().length >= 2 && item.main_effect.label.toLocaleLowerCase("fr").includes(mergeQuery.toLocaleLowerCase("fr"))).slice(0,8).map((item) => (
                   <option key={item.id} value={item.id}>{item.main_effect.label}</option>
                 ))}
               </select>
               <button disabled={!mergeTarget || busy} onClick={() => act(() => api.mergeCard(card.id, mergeTarget))}>Fusionner</button>
             </label>
-            <label>
-              <Link2 size={15} />
-              <select value={parentTarget} onChange={(event) => setParentTarget(event.target.value)}>
-                <option value="">Rattacher a...</option>
-                {sortedEffectNodes.map((node) => (
-                  <option key={node.id} value={node.id}>{node.label}</option>
-                ))}
-              </select>
+            <div className="parent-search"><strong>Rattacher à un concept</strong>
+              <ConceptSearch sourceId={String(card.graph_node_ids.effect || "")} documentId={card.document_id} nodeType="effect" initialScope="validated" value={parentNode} onSelect={node => { setParentNode(node); setParentTarget(node?.id ?? ""); }} />
               <button disabled={!parentTarget || busy} onClick={attachParent}>Rattacher</button>
-            </label>
+            </div>
           </div>
         </>
       )}

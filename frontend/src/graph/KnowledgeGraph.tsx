@@ -67,11 +67,15 @@ export default function KnowledgeGraph({ graph, onSelect }: Props) {
           }
         }
       ],
-      layout: { name: "cose", animate: true, fit: true, padding: 40 }
+      // COSE's queued animation frames can outlive a React unmount.
+      layout: { name: "cose", animate: false, fit: true, padding: 40 }
     });
     cy.on("tap", "node", (event) => onSelect(event.target.data() as KnowledgeNode));
     cyRef.current = cy;
-    return () => cy.destroy();
+    return () => {
+      cy.destroy();
+      if (cyRef.current === cy) cyRef.current = null;
+    };
   }, [graph, onSelect]);
 
   return <div className="graph-canvas" ref={containerRef} />;

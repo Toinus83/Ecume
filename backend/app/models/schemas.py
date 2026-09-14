@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 NodeType = Literal["effect", "object", "action", "condition", "task", "theme"]
@@ -26,6 +26,8 @@ BusinessCategory = Literal[
     "non_qualifie",
 ]
 BusinessValidationStatus = Literal[
+    "auto_validated",
+    "needs_user_validation",
     "proposed",
     "validated_by_user",
     "corrected_by_user",
@@ -65,7 +67,60 @@ class SourceDocument(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ImportSettings(BaseModel):
+    retention_policy: Literal["keep", "purge_after_success"] = "keep"
+
+
+class ValidationSettings(BaseModel):
+    mode: Literal["strict", "assisted", "automatic"] = "assisted"
+    auto_threshold: float = Field(default=0.9, ge=0, le=1)
+    review_threshold: float = Field(default=0.6, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def ordered_thresholds(self):
+        if self.review_threshold > self.auto_threshold:
+            raise ValueError("Le seuil a revoir doit etre inferieur ou egal au seuil d'auto-validation.")
+        return self
+
+
+class DeleteDocumentRequest(BaseModel):
+    confirmation: str
+    delete_knowledge: bool = False
+    knowledge_confirmation: str = ""
+
+
+class ValidationApplyRequest(BaseModel):
+    settings: ValidationSettings
+    card_ids: list[str] = Field(max_length=10000)
+
+
+class SuggestionRepair(BaseModel):
+    source_node_id: str
+    target_node_id: str
+    relation_type: RelationType
+
+
+class SuggestionTargetCreate(BaseModel):
+    source_node_id: str
+    relation_type: RelationType
+    label: str = Field(min_length=1, max_length=240)
+    type: NodeType = "object"
+    description: str = Field(default="", max_length=3000)
+
+
+class OrphanUpdate(BaseModel):
+    label: str | None = None
+    business_category: BusinessCategory | None = None
+    level: Level | None = None
+    target_node_id: str | None = None
+    relation_type: RelationType = "contribue à"
+    orphan_status: Literal["accepted_orphan", "orphan_to_review"] | None = None
+
+
 class SuggestedLink(BaseModel):
+    id: str | None = None
+    status: Literal["proposed", "accepted", "ignored", "to_review", "rejected"] = "proposed"
+    source_node_id: str | None = None
     source_label: str
     target_existing_node_id: str | None = None
     target_label: str | None = None
@@ -92,6 +147,7 @@ class ArchimateMapping(BaseModel):
 
 
 class ExtractedCard(BaseModel):
+    extraction_details: dict[str, Any] = Field(default_factory=dict)
     id: str
     document_id: str
     theme_label: str
@@ -182,6 +238,10 @@ class CardUpdate(BaseModel):
 
 class MergeCardRequest(BaseModel):
     target_card_id: str
+
+
+class SuggestionDecision(BaseModel):
+    status: Literal["proposed", "accepted", "ignored", "to_review", "rejected"]
 
 
 class ManualCardRequest(BaseModel):

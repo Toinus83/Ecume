@@ -4,7 +4,7 @@ from typing import Any
 
 
 def build_analysis_prompt(
-    *, title: str, content_text: str, existing_nodes: list[dict[str, Any]]
+    *, title: str, content_text: str, existing_nodes: list[dict[str, Any]], extraction_mode: str = "sober"
 ) -> str:
     existing = [
         {"id": node["id"], "label": node["label"], "type": node["type"], "level": node["level"]}
@@ -14,6 +14,26 @@ def build_analysis_prompt(
     return f"""
 Tu aides ECUME, un outil local de capitalisation de connaissance metier sur la couche usage.
 Tu proposes une structuration, sans pretendre produire une verite.
+
+PRIORITE : QUALITE, PAS EXHAUSTIVITE. Mode d'extraction : {extraction_mode}.
+Ne collecte pas tous les termes. Selectionne les concepts directement utiles a l'effet principal.
+Ecarte les fragments, variantes redondantes et termes generiques sans utilite dans cette carte.
+Sobre (sober) : un effet et au plus 4 concepts associes principaux, seulement les essentiels.
+Equilibre (balanced) : un effet et au plus 8 concepts associes principaux, quelques secondaires utiles.
+Exhaustif (exhaustive) : collecte plus large, mais distingue toujours principaux, secondaires et bruit.
+Un plafond n'est pas un objectif a remplir. Une carte avec un seul concept peut etre suffisante.
+L'importance est locale a la carte. La confiance dit si le concept est compris ; la saillance dit s'il est utile ici.
+Pour chaque concept, estime salience_score et confidence entre 0 et 1, independamment.
+Utilise null seulement si ce score ne peut pas etre estime. Justifie chaque concept principal.
+Les objets (objects) designent les choses, acteurs ou moyens : une voie est un objet, pas une action.
+Les actions (actions) et taches (tasks) designent un travail a faire, formule avec un verbe.
+Les conditions (conditions) designent les contraintes ou circonstances : un risque n'est pas une tache.
+Les anciennes listes objects/actions/conditions/tasks doivent reprendre les memes libelles et roles que concepts, sans variantes supplementaires.
+Conserve TOUTES les regles, seuils, distances, unites, conditions et exceptions utiles dans
+main_effect.description ou rule_details, avec leurs sources, meme sans en faire des concepts.
+Ne remplace jamais une regle precise par une generalite pour raccourcir la carte.
+Propose au maximum 3 liens importants entre concepts principaux, avec des identifiants existants.
+Une cible absente ne doit jamais recevoir un identifiant invente.
 
 Langage utilisateur attendu : effet, objet, action, condition, tache.
 N'utilise pas de jargon ontologique, RDF, OWL, MBSE ou UAF dans les libelles.
@@ -32,6 +52,12 @@ Types de liens autorises :
 
 Niveaux autorises : strategic, operational, tactical, operator, unknown.
 Confiance autorisee : low, medium, high.
+Ajoute business_confidence, un score estime entre 0 et 1 pour la comprehension metier
+de chaque carte et de chaque rapprochement. Ce score est independant du mapping ArchiMate.
+Utilise null si tu ne peux pas estimer ce score. Ne recopie pas un score d'exemple.
+Ajoute ambiguities : une liste courte des interpretations concurrentes ou incertitudes metier.
+Un score eleve exige une proposition explicite et non ambigue dans la source.
+source_excerpt doit etre un extrait court du document, au maximum 1200 caracteres.
 
 Categories metier autorisees :
 - resultat_recherche
@@ -81,6 +107,11 @@ Schema exact :
         "status": "proposed_by_llm"
       }},
       "objects": ["..."],
+      "concepts": [{{"label": "...", "role": "objects|actions|conditions|tasks",
+        "importance": "principal|secondary|weak|ignored", "salience_score": null,
+        "confidence": null, "reason": "Pourquoi ce concept est central ou secondaire dans CETTE carte.",
+        "source_excerpt": "Extrait court exact du document."}}],
+      "rule_details": ["Regle precise, valeurs, unites, conditions et exceptions sans alteration."],
       "actions": ["..."],
       "conditions": ["..."],
       "tasks": ["..."],
@@ -92,11 +123,15 @@ Schema exact :
           "target_label": "...",
           "relation_type": "contribue à|se décompose en|concerne|nécessite|déclenche|proche de|équivalent à",
           "confidence": "low|medium|high",
+          "business_confidence": null,
+          "ambiguities": [],
           "reason": "..."
         }}
       ],
       "source_excerpt": "...",
-      "confidence": "low|medium|high"
+      "confidence": "low|medium|high",
+      "business_confidence": null,
+      "ambiguities": []
     }}
   ],
   "orphans": [],
