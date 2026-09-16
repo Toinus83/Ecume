@@ -9,6 +9,8 @@ export default function ReferencesPage() {
   const [repositories, setRepositories] = useState<ReferenceRepository[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [target, setTarget] = useState("");
+  const [layer, setLayer] = useState("auto");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [refresh, setRefresh] = useState(0);
@@ -51,11 +53,14 @@ export default function ReferencesPage() {
     <form className="reference-import" onSubmit={event => {
       event.preventDefault(); if (!file) return;
       void act(async () => {
-        const result = await api.importReference(file);
+        const result = await api.importReference(file,target,layer);
+        setTarget(result.id);
         setSelected(result.id); setOffset(0); setTermQuery("");
       }, "Référentiel disponible. Une copie identique déjà importée est réutilisée.");
     }}>
-      <label>Charger un référentiel<input type="file" accept=".ttl,.rdf,.owl" disabled={busy} onChange={event => setFile(event.target.files?.[0] ?? null)} /></label>
+      <label>Référentiel Echo<select value={target} disabled={busy} onChange={event=>setTarget(event.target.value)}><option value="">Nouveau / regrouper par nom de fichier</option>{repositories.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
+      <label>Couche<select value={layer} disabled={busy} onChange={event=>setLayer(event.target.value)}><option value="auto">Détection automatique</option><option value="owl">OWL · modèle conceptuel</option><option value="voc">VOC · vocabulaire métier</option><option value="shacl">SHACL · règles de contrôle</option><option value="mixed">Plusieurs couches</option></select></label>
+      <label>Charger un fichier<input type="file" accept=".ttl,.rdf,.owl,.xml,.shacl" disabled={busy} onChange={event => setFile(event.target.files?.[0] ?? null)} /></label>
       <button disabled={!file || busy}><FileUp size={16} />{busy ? "Traitement…" : "Importer la copie"}</button>
     </form>
     <ActionError error={error} />
@@ -72,6 +77,17 @@ export default function ReferencesPage() {
           if (confirmation === "SUPPRIMER") void act(async () => { await api.deleteReference(repository.id, confirmation); if (selected === repository.id) setSelected(""); }, "Copie locale supprimée. Connaissance ECUME conservée.");
         }}><Trash2 size={15} />Supprimer la copie</button></div>
       {selected === repository.id && <div className="reference-inspection">
+        {repository.profile.echo && <>
+          <p>Profil : {{sufficient:"suffisant",partial:"partiel",insufficient:"insuffisant"}[repository.profile.echo.confidence]} · Correspondances : {repository.profile.echo.alignment_ready ? "exploitables" : "à vérifier"}</p>
+          <dl className="echo-layers">{Object.entries(repository.profile.echo.layers).map(([name,info])=><div key={name}><dt>{name.toUpperCase()}</dt><dd>{{not_provided:"Non fournie",imported:"Importée",partial:"Partiellement comprise",insufficient:"Insuffisante"}[info.state] || info.state}</dd></div>)}</dl>
+          <p className="quiet-note">{repository.profile.echo.owl.classes.length} classes · {repository.profile.echo.owl.properties.length} propriétés · {repository.profile.echo.voc.term_count} termes · {repository.profile.echo.shacl.interpreted} formes interprétées · {repository.profile.echo.shacl.uninterpreted} non interprétées</p>
+          <details><summary>Fichiers associés ({repository.profile.echo.files?.length || 1}) et limites</summary>
+            <ul>{repository.profile.echo.files?.map(f=><li key={f.id}>{f.filename} · {f.layer} · {f.format}</li>)}</ul>
+            <ul>{repository.profile.echo.warnings.map((w,i)=><li key={i}>{w}</li>)}</ul>
+            <p>{repository.profile.echo.rdf_export_reason}</p>
+            {repository.profile.echo.shacl.shapes.filter(s=>s.status!=="interpreted").map(s=><p key={s.uri}>{s.label} : {s.unsupported.join(", ")}</p>)}
+          </details>
+        </>}
         {repository.profile.warnings.length > 0 && <details><summary>{repository.profile.warnings.length} points à vérifier</summary><ul>{repository.profile.warnings.map((warning,i) => <li key={i}>{warning}</li>)}</ul></details>}
         <p className="quiet-note">Langue principale : {repository.profile.main_language || "non détectée"} · Version : {repository.version || "non détectée"}</p>
         <EchoMappings repositoryId={repository.id} />

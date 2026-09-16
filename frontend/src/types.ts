@@ -96,7 +96,7 @@ export interface ConceptProposal {
 }
 
 export interface ExtractedCard {
-  extraction_details?: { managed?: boolean; mode?: string; concepts?: ConceptProposal[]; rule_details?: string[]; source_excerpts?: string[]; secondary_effects?: string[]; ambiguities?: string[]; source_checks?: { text: string; chunk_index: number; start: number; end: number; origin: string; status: string }[] };
+  extraction_details?: { business_rules?: BusinessRule[]; managed?: boolean; mode?: string; concepts?: ConceptProposal[]; rule_details?: string[]; source_excerpts?: string[]; secondary_effects?: string[]; ambiguities?: string[]; source_checks?: { text: string; chunk_index: number; start: number; end: number; origin: string; status: string }[] };
   business_confidence?: number | null;
   validation_decision?: Record<string, unknown>;
   id: string;
@@ -228,6 +228,7 @@ export interface AnalysisJob {
   metadata: Record<string, unknown>;
 }
 export interface ReferenceProfile {
+  echo?: EchoProfile;
   status: "partial" | "detected";
   warnings: string[];
   namespaces: Record<string, string>;
@@ -250,6 +251,30 @@ export interface ReferenceRepository {
   id: string; name: string; filename: string; format: string; content_hash: string;
   created_at: string; active: boolean; namespace: string; version: string;
   profile: ReferenceProfile; already_imported?: boolean;
+}
+
+export interface EchoProfile {
+  confidence: "sufficient" | "partial" | "insufficient";
+  alignment_ready: boolean; rdf_export_ready: boolean; rdf_export_reason: string;
+  layers: Record<string,{state:string}>;
+  owl: {classes: {uri:string;label:string}[]; properties: {uri:string;label:string}[]};
+  voc: {term_count:number;alias_count:number};
+  shacl: {shapes:{uri:string;label:string;status:string;unsupported:string[]}[];interpreted:number;uninterpreted:number};
+  files: {id:string;filename:string;format:string;layer:string;content_hash:string}[];
+  warnings: string[];
+}
+export interface BusinessRule {
+  id:string; label:string; description:string; rule_type:string; value:string; unit:string;
+  condition:string; exception:string; source_excerpt:string;
+}
+export interface EchoCheck { element_id:string; status:string; message:string; shape_label?:string; }
+export interface EchoReport {
+  concepts:number; recognized_existing:number; new_concepts:number; new_business_rules:number;
+  shacl_counts:Record<string,number>; warnings:{message:string}[]; profile_confidence:string;
+}
+export interface EchoCardReport {
+  repository_id:string; name:string; recognized:{node_id:string;node_label:string;target_label:string}[];
+  new_concepts:{id:string;label:string;classification:string}[]; rules:BusinessRule[]; checks:EchoCheck[]; report:EchoReport;
 }
 
 export interface ReferenceTerm {

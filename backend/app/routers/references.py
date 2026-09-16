@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from fastapi.responses import FileResponse
 
@@ -28,6 +28,15 @@ class MappingDecision(BaseModel):
     status: str
 
 
+class RuleCorrection(BaseModel):
+    label: str
+    description: str = ''
+    value: str = ''
+    unit: str = ''
+    condition: str = ''
+    exception: str = ''
+
+
 def call(function, *args, **kwargs):
     try:
         return function(*args, **kwargs)
@@ -45,6 +54,31 @@ def mappings(node_id: str = '', repository_id: str = ''):
     return echo.mappings(node_id, repository_id)
 
 
+@router.get('/cards/{card_id}/workshop')
+def card_workshop(card_id: str):
+    from app.services.card_service import require_card
+    call(require_card,card_id)
+    result=[]
+    for repository in references.list_repositories():
+        if repository['active']:
+            payload=call(echo_exports.build_package,repository['id'],card_id)
+            result.append({'repository_id':repository['id'],'name':repository['name'],
+                'recognized':payload['recognized_existing_echo_elements'],'new_concepts':payload['proposed_new_concepts'],
+                'rules':payload['ecume_rules'],'checks':payload['shacl_checks'],'report':payload['control_report']})
+    return result
+
+
+@router.patch('/cards/{card_id}/rules/{rule_id}')
+def correct_rule(card_id: str, rule_id: str, request: RuleCorrection):
+    from app.services.business_rule_service import update
+    return call(update,card_id,rule_id,request.model_dump())
+
+
+@router.get('/{repository_id}/report')
+def control_report(repository_id: str):
+    return call(echo_exports.build_package,repository_id)['control_report']
+
+
 @router.post('/mappings/search')
 def search_mappings(request: MappingSearch):
     return call(echo.propose, request.repository_id, request.node_id)
@@ -56,9 +90,9 @@ def decide_mapping(mapping_id: str, request: MappingDecision):
 
 
 @router.post('/import')
-def import_reference(file: UploadFile = File(...)):
+def import_reference(file: UploadFile = File(...), repository_id: str = Form(''), layer: str = Form('auto')):
     data = file.file.read(MAX_BYTES + 1)
-    return call(references.import_reference, file.filename or '', data)
+    return call(references.import_reference, file.filename or '', data, repository_id, layer)
 
 
 @router.get('/{repository_id}/terms')

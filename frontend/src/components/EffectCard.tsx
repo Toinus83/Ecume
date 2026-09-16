@@ -18,6 +18,7 @@ import SuggestionRepair from "./SuggestionRepair";
 import ConceptSearch from "./ConceptSearch";
 import { ActionError, Hint } from "./ContextHelp";
 import CardConcepts from "./CardConcepts";
+import EchoCard from "./EchoCard";
 import EchoMappings from "./EchoMappings";
 
 interface Props {
@@ -430,6 +431,7 @@ export default function EffectCard({ card, allCards, onChanged, onOpenGraph }: P
           </section>
 
           <CardConcepts card={card} busy={busy} onDecision={(id, action) => void act(() => api.decideConcept(card.id, id, action))} />
+          <EchoCard card={card} onChange={()=>onChanged()} />
 
           <section className="review-section review-decision" title={selectedCategory.tooltip}>
             <span>{["accepted", "accepted_orphan"].includes(card.status) ? "Qualification validée" : "À valider"}</span>

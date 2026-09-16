@@ -1,0 +1,9 @@
+@prefix e: <https://example.org/echo#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+e:Construction a owl:Class; rdfs:label "Construction".
+e:Distance a owl:Class; rdfs:label "Distance minimale".
+e:value a owl:DatatypeProperty; rdfs:label "valeur"; rdfs:domain e:Distance; rdfs:range xsd:decimal.
+e:unit a owl:DatatypeProperty; rdfs:label "unite"; rdfs:domain e:Distance; rdfs:range xsd:string.
+e:source a owl:ObjectProperty; rdfs:label "source".

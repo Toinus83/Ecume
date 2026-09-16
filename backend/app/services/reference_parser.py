@@ -63,7 +63,7 @@ def _literals(graph, subject, predicates):
 def parse_reference(data: bytes, extension: str, digest: str) -> dict:
     if not data or len(data) > MAX_BYTES:
         raise ValueError('Le fichier doit contenir entre 1 octet et 5 Mo.')
-    if extension not in {'.ttl', '.rdf', '.owl'}:
+    if extension not in {'.ttl', '.rdf', '.owl', '.xml', '.shacl'}:
         raise ValueError('Formats acceptes : TTL, RDF/XML et OWL en RDF/XML ou Turtle.')
     base = f'https://ecume.invalid/reference/{digest}/'
     formats = ['turtle'] if extension == '.ttl' else ['xml', 'turtle']
@@ -89,11 +89,13 @@ def parse_reference(data: bytes, extension: str, digest: str) -> dict:
     if graph is None or not len(graph):
         raise ValueError('Referentiel illisible ou vide. Verifiez la syntaxe Turtle ou RDF/XML ; OWL/XML fonctionnel non pris en charge.')
     warnings = []
-    subjects = {subject for kind in TERM_TYPES for subject in graph.subjects(RDF.type, kind) if isinstance(subject, URIRef)}
+    subjects = {subject for kind in (*TERM_TYPES, OWL.ObjectProperty, OWL.DatatypeProperty) for subject in graph.subjects(RDF.type, kind) if isinstance(subject, URIRef)}
     known = set(subjects)
     subjects.update(subject for predicate in (*LABELS, *DEFINITIONS) for subject in graph.subjects(predicate, None)
                     if isinstance(subject, URIRef) and (subject, RDF.type, OWL.Ontology) not in graph
                     and not any((subject, RDF.type, kind) in graph for kind in (RDF.Property, OWL.ObjectProperty, OWL.DatatypeProperty, OWL.AnnotationProperty)))
+    from rdflib.namespace import SH
+    subjects = {subject for subject in subjects if not any((subject,RDF.type,kind) in graph for kind in (SH.NodeShape,SH.PropertyShape))}
     if subjects - known:
         warnings.append('Certains termes etiquetes ne sont pas declares comme classes OWL ou concepts SKOS : profil partiel.')
     if not subjects:
@@ -149,6 +151,8 @@ def parse_reference(data: bytes, extension: str, digest: str) -> dict:
         'hierarchy_properties':[str(p) for p in HIERARCHY if str(p) in used], 'associative_properties':[str(p) for p in ASSOCIATIVE if str(p) in used],
         'other_properties':sorted(used - {str(p) for p in (*LABELS,*ALIASES,*DEFINITIONS,*HIERARCHY,*ASSOCIATIVE,RDF.type,RDFS.comment)}),
         'naming_conventions': 'Non inferees : noms de fichiers et URI conserves sans convention imposee.'}
+    from app.services.echo_profile import inspect
+    profile['echo'] = inspect(graph)
     return {'name':naming[0][0] if naming else '', 'format':detected, 'namespace':principal.most_common(1)[0][0] if principal else '',
             'version':versions[0] if len(versions)==1 else '', 'profile':profile, 'terms':terms,
             'relations':sorted(relations, key=lambda item:(item['source_uri'],item['relation_type'],item['target_uri']))}

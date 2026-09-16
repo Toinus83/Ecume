@@ -32,6 +32,9 @@ data/*.db
 *.ttl
 *.rdf
 *.owl
+!backend/tests/fixtures/Echo_Test.owl.ttl
+!backend/tests/fixtures/Echo_Test.voc.ttl
+!backend/tests/fixtures/Echo_Test.shacl.ttl
 
 # Frontend
 frontend/node_modules/

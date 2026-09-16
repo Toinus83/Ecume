@@ -1,0 +1,11 @@
+@prefix e: <https://example.org/echo#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+e:DistanceShape a sh:NodeShape; sh:targetClass e:Distance;
+ sh:property [sh:path e:value; sh:minCount 1; sh:maxCount 1; sh:datatype xsd:decimal];
+ sh:property [sh:path e:unit; sh:minCount 1; sh:in ("m" "cm")];
+ sh:property [sh:path e:source; sh:minCount 1; sh:nodeKind sh:IRI].
+e:VocabularyShape a sh:NodeShape; sh:targetClass skos:Concept;
+ sh:property [sh:path skos:prefLabel; sh:minCount 1];
+ sh:property [sh:path skos:definition; sh:minCount 1].

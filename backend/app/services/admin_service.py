@@ -63,6 +63,8 @@ def reset_database(*, confirmation: str, delete_uploads: bool, delete_exports: b
         "reference_relations",
         "reference_terms",
         "reference_repositories",
+        "reference_files",
+        "echo_validation_reports",
         "link_suggestions",
         "card_relations",
         "card_concepts",

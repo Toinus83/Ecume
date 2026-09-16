@@ -202,6 +202,16 @@ def init_db() -> None:
                 UNIQUE(node_id, repository_id, target_uri)
             );
             CREATE INDEX IF NOT EXISTS idx_reference_terms_repo ON reference_terms(repository_id);
+            CREATE TABLE IF NOT EXISTS reference_files (
+                id TEXT PRIMARY KEY, repository_id TEXT NOT NULL, filename TEXT NOT NULL,
+                content_hash TEXT NOT NULL, format TEXT NOT NULL, layer TEXT NOT NULL DEFAULT 'auto',
+                created_at TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '{}', source_content BLOB NOT NULL,
+                UNIQUE(repository_id, content_hash)
+            );
+            CREATE TABLE IF NOT EXISTS echo_validation_reports (
+                id TEXT PRIMARY KEY, repository_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                fingerprint TEXT NOT NULL, report TEXT NOT NULL DEFAULT '{}'
+            );
             CREATE INDEX IF NOT EXISTS idx_echo_mappings_node ON echo_mappings(node_id);
             CREATE INDEX IF NOT EXISTS idx_nodes_type ON knowledge_nodes(type);
             CREATE INDEX IF NOT EXISTS idx_edges_source ON knowledge_edges(source_node_id);
@@ -213,6 +223,7 @@ def init_db() -> None:
             """
         )
         _ensure_column(conn, "extracted_cards", "business_category", "TEXT NOT NULL DEFAULT 'resultat_recherche'")
+        _ensure_column(conn, "echo_mappings", "target_signature", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "extracted_cards", "extraction_details", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "extracted_cards", "business_validation_status", "TEXT NOT NULL DEFAULT 'proposed'")
         _ensure_column(conn, "extracted_cards", "business_justification", "TEXT NOT NULL DEFAULT ''")

@@ -305,6 +305,11 @@ Le `.gitignore` les exclut explicitement.
 
 ## Atelier Echo
 
+Le MVP gere maintenant un referentiel logique **OWL / VOC / SHACL**, les regles
+metier structurees, la reconnaissance lexicale automatique et le controle SHACL
+simple. Le [guide de recette OWL/VOC/SHACL](docs/echo-owl-voc-shacl.md) decrit le
+scenario a tester, les fichiers synthetiques et les limites de la projection.
+
 L'onglet **Referentiels** permet d'importer une copie locale TTL, RDF/XML ou OWL
 (serialise en RDF/XML ou Turtle), d'examiner son profil et de proposer des
 correspondances avec les concepts metier valides. La reference source n'est jamais modifiee.

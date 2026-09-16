@@ -42,7 +42,7 @@ class OllamaProvider(LLMProvider):
         existing_nodes: list[dict[str, Any]],
     ) -> dict[str, Any]:
         prompt = build_analysis_prompt(
-            title=title, content_text=content_text, existing_nodes=existing_nodes, extraction_mode=getattr(self, "extraction_mode", "sober")
+            title=title, content_text=content_text, existing_nodes=existing_nodes, extraction_mode=getattr(self, "extraction_mode", "sober"), echo_context=getattr(self,"echo_context","")
         )
         async with httpx.AsyncClient(timeout=120) as client:
             response = await self._post(client,

@@ -14,7 +14,7 @@ import type {
   SuggestedLink,
   ReferenceRepository,
   ReferenceTerm,
-  EchoMapping
+  EchoMapping, EchoReport, EchoCardReport, BusinessRule
 } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
@@ -33,13 +33,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   baseUrl: API_BASE,
+  echoReport: (id: string) => request<EchoReport>(`/references/${id}/report`),
+  echoCard: (id: string) => request<EchoCardReport[]>(`/references/cards/${id}/workshop`),
+  correctRule: (cardId: string, rule: BusinessRule) => request<ExtractedCard>(`/references/cards/${cardId}/rules/${rule.id}`, {method:"PATCH",body:JSON.stringify(rule)}),
   references: () => request<ReferenceRepository[]>("/references"),
   echoExportUrl: (id: string, format: "json" | "csv") => API_BASE+"/references/"+encodeURIComponent(id)+"/export/"+format,
   echoMappings: (node_id = "", repository_id = "") => request<EchoMapping[]>(`/references/mappings?${new URLSearchParams({node_id,repository_id})}`),
   searchEchoMappings: (node_id = "", repository_id = "") => request<Record<string,number>>("/references/mappings/search", {method:"POST",body:JSON.stringify({node_id,repository_id})}),
   decideEchoMapping: (id: string, match_type: string, status: string) => request<EchoMapping>(`/references/mappings/${id}`, {method:"PATCH",body:JSON.stringify({match_type,status})}),
-  importReference: (file: File) => {
+  importReference: (file: File, repository_id = "", layer = "auto") => {
     const body = new FormData(); body.append("file", file);
+    body.append("repository_id",repository_id); body.append("layer",layer);
     return request<ReferenceRepository>("/references/import", { method: "POST", body });
   },
   referenceTerms: (id: string, q = "", offset = 0) => request<{ items: ReferenceTerm[]; total: number; has_more: boolean }>(`/references/${id}/terms?${new URLSearchParams({q, offset: String(offset)})}`),

@@ -1,5 +1,9 @@
 # Atelier Echo
 
+Pour le MVP multi-fichiers OWL/VOC/SHACL, consulter le
+[guide actualise et la recette](echo-owl-voc-shacl.md). Les sections ci-dessous
+decrivent le socle Echo initial ; le nouveau guide precise ses extensions.
+
 ECUME prepare des propositions ; le referentiel Echo reste la reference centrale.
 Le flux est : reference locale -> concepts metier valides -> correspondances ->
 lot d'enrichissement -> controle humain et reimport dans l'outil externe.

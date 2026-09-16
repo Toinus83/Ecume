@@ -21,9 +21,13 @@ MATCH_DESCRIPTIONS = {
 
 
 @atomic
-def build_package(repository_id: str) -> dict:
+def build_package(repository_id: str, card_id: str = '') -> dict:
     repository = references.require_repository(repository_id)
     snapshot = exports._complete_export_payload('validated')
+    if card_id:
+        snapshot['cards']=[card for card in snapshot['cards'] if card['id']==card_id]
+        ids={node_id for card in snapshot['cards'] for values in card['graph_node_ids'].values() for node_id in (values if isinstance(values,list) else [values]) if node_id}
+        snapshot['nodes']=[node for node in snapshot['nodes'] if node['id'] in ids]
     nodes = {node['id']:node for node in snapshot['nodes']}
     warnings = [{'code':'reference_profile','entity_id':repository_id,'message':message} for message in repository['profile']['warnings']]
     if not repository['active']:
@@ -61,6 +65,10 @@ def build_package(repository_id: str) -> dict:
                      and node.get('metadata',{}).get('standalone_status') not in {'accepted','accepted_orphan'}
                      and node.get('orphan_status')!='accepted_orphan'}
     nodes = {node_id:node for node_id,node in nodes.items() if node_id not in excluded_weak}
+    if repository['profile'].get('echo'):
+        from app.services.echo_workshop import synchronize
+        for warning in synchronize(repository_id,list(nodes) if len(nodes)<20 else None):
+            warnings.append({'code':'echo_search_incomplete','entity_id':repository_id,'message':warning})
     all_mappings = [item for item in echo.mappings(repository_id=repository_id) if item['node_id'] in nodes]
     primary_mappings = []
     review = []
@@ -118,6 +126,7 @@ def build_package(repository_id: str) -> dict:
     source_ids = {source_id for node in concepts for source_id in node['source_ids']}
     source_ids.update(source_id for edge in relations for source_id in edge['source_ids'])
     source_ids.update(card['document_id'] for card in evidence_cards)
+    source_ids.update(rule.get('source_document_id') or card['document_id'] for card in snapshot['cards'] for rule in (card.get('extraction_details') or {}).get('business_rules',[]))
     for card in evidence_cards:
         source_ids.update(check.get('document_id') for check in card['source_checks'] if check.get('document_id'))
     sources = [{key:doc.get(key) for key in ('id','uri','title','filename','file_type','created_at','content_hash','source_status')}
@@ -133,7 +142,7 @@ def build_package(repository_id: str) -> dict:
         'mappings_to_review':len(review),'possible_duplicates':counts['possible_duplicate'], 'rejected_nodes_excluded':rejected_nodes,
         'rejected_mappings_excluded':rejected_mappings,'weak_nodes_excluded':len(excluded_weak),'warnings':warnings,
         'ready_for_automatic_import':False}
-    return {'metadata':{'format':'ECUME Echo enrichment package','version':'1.0','generated_at':now_iso(),
+    payload = {'metadata':{'format':'ECUME Echo enrichment package','version':'1.0','generated_at':now_iso(),
                         'scope':'validated_business_knowledge','authoritative':False,'source_reference_modified':False,
                         'instruction':'Propositions a controler par un expert avant reimport externe. Aucun changement a appliquer automatiquement.'},
         'target_reference':repository, 'detected_profile':repository['profile'],
@@ -143,6 +152,9 @@ def build_package(repository_id: str) -> dict:
             'relation_semantics':exports.RELATION_DESCRIPTIONS,'mapping_semantics':MATCH_DESCRIPTIONS},
         'concepts':concepts,'mappings':primary_mappings,'proposed_enrichments':enrichments,'proposed_relations':relations,
         'sources':sources,'evidence_cards':evidence_cards,'items_to_review':review,'warnings':warnings,'control_report':report}
+    from app.services.echo_workshop import enrich
+    payload['_cards']=snapshot['cards']
+    return enrich(payload, synchronize_candidates=False)
 
 
 def export_json(repository_id: str):
@@ -182,6 +194,14 @@ def export_csv(repository_id: str):
         'echo_relations.csv':(payload['proposed_relations'],['id','source_node_id','source_label','target_node_id','target_label','relation_type','direction','description','status','proposal_status','confidence','source_ids','source_titles','source_excerpt']),
         'echo_warnings.csv':(payload['warnings'],['code','entity_id','message']),
     }
+    files.update({
+        'echo_recognized_existing.csv':(payload['recognized_existing_echo_elements'],['node_id','node_label','target_layer','target_uri','target_label','recognition','status','reason']),
+        'echo_new_voc_terms.csv':(payload['proposed_voc_terms'],['node_id','label','definition','aliases','status','source_ids']),
+        'echo_rules.csv':(payload['ecume_rules'],['id','label','description','rule_type','value','unit','condition','exception','source_document_id','source_excerpt','status','reason','confidence','salience_score','owl_candidates']),
+        'echo_shacl_report.csv':(payload['shacl_checks'],['element_id','shape_uri','shape_label','path','status','severity','message','projection']),
+    })
+    files['echo_new_concepts.csv']=(payload['proposed_new_concepts'],files['echo_new_concepts.csv'][1])
+    files['echo_mappings.csv']=([*payload['proposed_owl_alignments'],*payload['proposed_voc_alignments'],*payload['proposed_shacl_alignments']],['id','element_id','element_type','node_id','node_label','target_layer','target_uri','target_label','match_type','score','reason','status','stale'])
     with zipfile.ZipFile(path,'w',compression=zipfile.ZIP_DEFLATED) as bundle:
         for name,(rows,fields) in files.items():
             bundle.writestr(name,_csv(rows,fields).encode('utf-8-sig'))

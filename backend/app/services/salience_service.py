@@ -121,6 +121,8 @@ def prepare(raw: dict, mode: str) -> tuple[dict, dict]:
                "source_checks": copy.deepcopy(raw.get("source_checks") or []),
                "source_excerpts": strings([raw.get("source_excerpt", ""), *strings(raw.get("source_excerpts"))]),
                "secondary_effects": strings(raw.get("secondary_effects"))}
+    from app.services.business_rule_service import extract
+    details['business_rules'] = extract(raw)
     return result, details
 
 
@@ -210,6 +212,7 @@ def merge_details(source: dict, target: dict) -> None:
             current["concepts"].append({**item, "id": str(uuid.uuid4()), "source_card_id": source["id"], "source_document_id": source["document_id"]})
             existing.add(identity)
     current["rule_details"] = strings([*current.get("rule_details", []), *incoming.get("rule_details", []), source["main_effect"].get("description", "")])
+    current['business_rules'] = [*current.get('business_rules',[]), *[{**rule,'source_document_id':rule.get('source_document_id') or source['document_id']} for rule in incoming.get('business_rules',[]) if rule['id'] not in {r['id'] for r in current.get('business_rules',[])}]]
     current["ambiguities"] = strings([*current.get("ambiguities", []), *incoming.get("ambiguities", [])])
     checks = [*current.get("source_checks", []), *incoming.get("source_checks", [])]
     current["source_checks"] = list({json.dumps(check, sort_keys=True): check for check in checks}.values())

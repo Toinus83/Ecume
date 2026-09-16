@@ -1,0 +1,6 @@
+@prefix e: <https://example.org/echo#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+e:Building a skos:Concept; skos:prefLabel "Construction"; skos:altLabel "Batiment";
+ skos:hiddenLabel "construction neuve"; skos:definition "Ouvrage construit"; skos:broader e:Asset; skos:related e:Limit.
+e:Asset a skos:Concept; skos:prefLabel "Bien"; skos:narrower e:Building.
+e:Limit a skos:Concept; skos:prefLabel "Limite separative".

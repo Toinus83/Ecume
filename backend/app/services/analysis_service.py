@@ -92,6 +92,8 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
                 }
             )
         existing_nodes = graph_service.existing_nodes_for_prompt()
+        from app.services.echo_workshop import extraction_context
+        provider.echo_context = extraction_context(chunk)
         try:
             analysis = await provider.analyze_document(
                 title=f"{document['title']} - partie {index}/{len(chunks)}",
@@ -215,7 +217,7 @@ def _consolidate_cards(raw_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if isinstance(main_effect, dict):
                 descriptions = list(dict.fromkeys([previous["main_effect"].get("description", ""), main_effect.get("description", "")]))
                 previous["main_effect"]["description"] = "\n\n".join(value for value in descriptions if value)
-            for field in ("objects", "actions", "conditions", "tasks", "secondary_effects", "rule_details", "concepts", "suggested_links", "ambiguities", "source_checks"):
+            for field in ("objects", "actions", "conditions", "tasks", "secondary_effects", "rule_details", "business_rules", "concepts", "suggested_links", "ambiguities", "source_checks"):
                 values = [*(previous.get(field) if isinstance(previous.get(field), list) else []), *(card.get(field) if isinstance(card.get(field), list) else [])]
                 previous[field] = list({json.dumps(value, sort_keys=True, ensure_ascii=False): value for value in values}.values())
             from app.services.salience_service import strings, score
@@ -234,6 +236,11 @@ def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str], *
     if extraction_mode is not None:
         from app.services.salience_service import prepare
         raw_card, extraction_details = prepare(raw_card, extraction_mode)
+        from app.services.business_rule_service import verify_sources
+        rule_warnings=verify_sources(extraction_details.get('business_rules',[]),document)
+        if rule_warnings and raw_card.get('business_rules'):
+            raw_card['ambiguities']=[*raw_card.get('ambiguities',[]),*rule_warnings]
+            extraction_details['ambiguities']=[*extraction_details.get('ambiguities',[]),*rule_warnings]
     card_id = str(uuid.uuid4())
     timestamp = now_iso()
     main_effect = raw_card.get("main_effect") or {}

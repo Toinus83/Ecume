@@ -13,6 +13,13 @@ MATCH_TYPES = {'exactMatch','closeMatch','broadMatch','narrowMatch','relatedMatc
 STATUSES = {'validated','to_review','rejected'}
 
 
+def target_signature(term: dict) -> str:
+    aliases=term.get('aliases',[])
+    if isinstance(aliases,str):
+        aliases=json.loads(aliases)
+    return hashlib.sha256(json.dumps([term.get('label',''),sorted(aliases),term.get('definition','')],ensure_ascii=False).encode()).hexdigest()
+
+
 def signature(node: dict) -> str:
     values = {key:node.get(key) for key in ('label','description','business_category','level')}
     with get_db() as conn:
@@ -34,7 +41,7 @@ def mappings(node_id: str = '', repository_id: str = '') -> list[dict]:
     signatures = {node_id:signature(nodes[node_id]) for node_id in {row['node_id'] for row in rows}}
     return [{**dict(row), 'target_aliases':json.loads(row['target_aliases']),
              'node_label':nodes[row['node_id']]['label'], 'repository_active':bool(row['repository_active']),
-             'stale':row['node_signature'] != signatures[row['node_id']]} for row in rows]
+             'stale':row['node_signature'] != signatures[row['node_id']] or bool(row['target_signature'] and row['target_signature'] != target_signature({'label':row['target_label'],'aliases':row['target_aliases'],'definition':row['target_definition']}))} for row in rows]
 
 
 def _words(value: str) -> set[str]:
@@ -106,11 +113,11 @@ def propose(repository_id: str = '', node_id: str = '') -> dict:
                     timestamp = now_iso()
                     mapping_id = current['id'] if current else str(uuid.uuid4())
                     conn.execute('''INSERT INTO echo_mappings
-                        (id,node_id,repository_id,target_uri,match_type,score,reason,node_signature,created_at,updated_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(node_id,repository_id,target_uri) DO UPDATE SET
+                        (id,node_id,repository_id,target_uri,match_type,score,reason,node_signature,created_at,updated_at,target_signature)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(node_id,repository_id,target_uri) DO UPDATE SET
                         match_type=excluded.match_type,score=excluded.score,reason=excluded.reason,
-                        node_signature=excluded.node_signature,updated_at=excluded.updated_at,status='candidate' ''',
-                        (mapping_id,node['id'],repository['id'],term['uri'],kind,score,reason,signature(node),timestamp,timestamp))
+                        node_signature=excluded.node_signature,updated_at=excluded.updated_at,status='candidate',target_signature=excluded.target_signature ''',
+                        (mapping_id,node['id'],repository['id'],term['uri'],kind,score,reason,signature(node),timestamp,timestamp,target_signature(term)))
                     counts['updated' if current else 'created'] += 1
             if not found:
                 counts['without_candidate'] += 1
@@ -133,8 +140,9 @@ def decide(mapping_id: str, match_type: str, status: str) -> dict:
         repository = references.require_repository(before['repository_id'])
         if not repository['active']:
             raise ValueError('Reactivez le referentiel avant de decider une correspondance.')
-        conn.execute('''UPDATE echo_mappings SET match_type=?,status=?,decision_origin='user',node_signature=?,updated_at=? WHERE id=?''',
-                     (match_type,status,signature(node),now_iso(),mapping_id))
+        term=conn.execute('SELECT * FROM reference_terms WHERE repository_id=? AND uri=?',(repository['id'],before['target_uri'])).fetchone()
+        conn.execute('''UPDATE echo_mappings SET match_type=?,status=?,decision_origin='user',node_signature=?,updated_at=?,target_signature=? WHERE id=?''',
+                     (match_type,status,signature(node),now_iso(),target_signature(dict(term)),mapping_id))
         record_change(entity_type='echo_mapping',entity_id=mapping_id,action=status,origin='user',
                       details={'before':dict(before),'match_type':match_type,'node_id':node['id'],'repository_id':repository['id']})
     return next(item for item in mappings(before['node_id'],before['repository_id']) if item['id']==mapping_id)
