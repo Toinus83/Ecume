@@ -1,9 +1,17 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import EffectCard from "../components/EffectCard";
-import ValidationControls from "../components/ValidationControls";
-import { ContextHelp, ActionError } from "../components/ContextHelp";
-import type { ExtractedCard, SourceDocument } from "../types";
+import SimpleConcept from "../components/SimpleConcept";
+import DocumentDomain from "../components/DocumentDomain";
+import { ActionError } from "../components/ContextHelp";
+import type { SourceDocument, ReviewWorkspace } from "../types";
+
+function explainAnalysisIssue(message: string) {
+  if (message.includes("aucun concept")) return "ECUME n'a pas trouvé de concept suffisamment clair dans cette partie du document.";
+  if (message.includes("n a pas pu etre analysee")) return "ECUME n'a pas réussi à lire cette partie avec le modèle configuré.";
+  if (message.includes("Valeur ou exception")) return "Un nombre, un seuil ou une exception apparaît dans le texte, mais ECUME n'a pas pu le rattacher avec certitude à un concept.";
+  if (message.includes("Message de controle ecarte")) return "Une proposition ressemblait à un message de contrôle plutôt qu'à un concept métier ; ECUME l'a écartée.";
+  return message;
+}
 
 interface Props {
   refreshKey: number;
@@ -14,103 +22,70 @@ interface Props {
 }
 
 export default function CardsPage({ refreshKey, onOpenGraph, documentFilter, cardFilter, onClearDocument }: Props) {
-  const [cards, setCards] = useState<ExtractedCard[]>([]);
+  const [data, setData] = useState<ReviewWorkspace>({ items: [], reports: [], issues: [] });
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
-  const [localRefresh, setLocalRefresh] = useState(0);
-  const [statusFilter, setStatusFilter] = useState(documentFilter || cardFilter ? "all" : "pending");
-  const [notice, setNotice] = useState("");
-  const [visibleCount, setVisibleCount] = useState(12);
-  useEffect(() => { setVisibleCount(12); }, [query, statusFilter, documentFilter?.id, cardFilter]);
-  useEffect(() => { setStatusFilter(documentFilter || cardFilter ? "all" : "pending"); }, [documentFilter?.id, cardFilter]);
-
+  const [revision, setRevision] = useState(0);
+  const [limit, setLimit] = useState(12);
+  const [currentDocument,setCurrentDocument]=useState<SourceDocument|null>(documentFilter);
+  useEffect(()=>setCurrentDocument(documentFilter),[documentFilter]);
   useEffect(() => {
-    let cancelled = false;
-    api.cards()
-      .then(nextCards => {
-        if (cancelled) return;
-        setCards(nextCards);
-        setError("");
-      })
-      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Chargement impossible"); });
-    return () => { cancelled = true; };
-  }, [refreshKey, localRefresh]);
-
-  const scopedCards = cards.filter(card => (!documentFilter || card.document_id === documentFilter.id) && (!cardFilter || card.id === cardFilter));
-  const workCards = scopedCards.filter(card => statusFilter === "all" ||
-    (statusFilter === "validated" && ["accepted", "accepted_orphan"].includes(card.status) && card.business_validation_status !== "auto_validated") ||
-    (statusFilter === "auto" && ["accepted", "accepted_orphan"].includes(card.status) && card.business_validation_status === "auto_validated") ||
-    (statusFilter === "review" && card.status === "to_confirm") ||
-    (statusFilter === "rejected" && card.status === "rejected") ||
-    (statusFilter === "pending" && card.status === "proposed"));
-  const filteredCards = workCards.filter((card) => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return true;
-    return [
-      card.theme_label,
-      card.main_effect.label,
-      card.main_effect.description,
-      card.business_category,
-      card.business_justification,
-      ...card.objects,
-      ...card.actions,
-      ...card.conditions,
-      ...card.tasks,
-      ...(card.extraction_details?.concepts?.map(item => item.label) ?? []),
-      ...(card.extraction_details?.rule_details ?? []),
-    ]
-      .join(" ")
-      .toLowerCase()
-      .includes(needle);
-  });
-
-  return (
-    <section className="page-stack">
-      <ValidationControls cardIds={filteredCards.map(card => card.id)} onApplied={() => setLocalRefresh(value => value + 1)} />
-      <p className="work-summary">{scopedCards.filter(card => card.status === "proposed").length} à traiter · {scopedCards.filter(card => card.status === "to_confirm").length} à revoir · {scopedCards.filter(card => ["accepted", "accepted_orphan"].includes(card.status)).length} validées, dont {scopedCards.filter(card => card.business_validation_status === "auto_validated").length} auto-validées</p>
-      <ContextHelp>ECUME affiche d’abord les concepts principaux. Les concepts secondaires sont disponibles dans les détails. Validez ce qui est juste, corrigez ou mettez à revoir le reste. Les anciennes cartes ne sont pas reclassées automatiquement.</ContextHelp>
-      {statusFilter === "auto" && filteredCards.length === 0 && <p className="quiet-note">Aucune carte auto-validée dans cette sélection. {scopedCards.filter(card => card.business_confidence == null).length} carte(s) sans score métier numérique ; {scopedCards.filter(card => card.business_validation_status === "validated_by_user" || card.business_validation_status === "corrected_by_user").length} carte(s) validées ou corrigées par un utilisateur. Le changement de mode ne retraite pas les cartes automatiquement.</p>}
-      <ActionError error={error} />
-      {notice && <p className="success" role="status">{notice}</p>}
-      {documentFilter && <div className="document-filter"><span>{documentFilter.filename}</span><button className="ghost-button" onClick={onClearDocument}>Tous les documents</button></div>}
-      {cardFilter && <div className="document-filter"><span>Carte source</span><button className="ghost-button" onClick={onClearDocument}>Toutes les cartes</button></div>}
-      <div className="section-title">
-        <h2>Cartes</h2>
-        <span>{filteredCards.length} / {workCards.length}</span>
-      </div>
-      <div className="segmented" aria-label="Statut des cartes">
-        {[["pending", "À traiter"], ["validated", "Validées"], ["auto", "Auto-validées"], ["review", "À revoir"], ["rejected", "Rejetées"], ["all", "Toutes"]].map(([value, label]) =>
-          <button key={value} aria-pressed={statusFilter === value} className={statusFilter === value ? "active" : ""} onClick={() => setStatusFilter(value)}>{label}</button>)}
-      </div>
-      <input
-        className="search-input"
-        placeholder="Rechercher dans les cartes"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-      />
-      <div className="cards-grid">
-        {filteredCards.length === 0 ? (
-          <p>Aucune carte dans cette sélection.</p>
-        ) : filteredCards.slice(0, visibleCount).map((card) => (
-          <EffectCard
-            key={card.id}
-            card={card}
-            allCards={cards}
-            onOpenGraph={onOpenGraph}
-            onChanged={(updated) => {
-              if (updated) {
-                setCards(current => current.map(item => item.id === updated.id ? updated : item));
-                setNotice(["accepted", "accepted_orphan"].includes(updated.status)
-                  ? "Carte validée : elle est visible dans les cartes validées et dans le graphe."
-                  : updated.status === "to_confirm" ? "Carte déplacée dans À revoir."
-                  : updated.status === "rejected" ? "Carte déplacée dans Rejetées." : "Modification enregistrée.");
-              }
-              setLocalRefresh((value) => value + 1);
-            }}
-          />
-        ))}
-      </div>
-      {filteredCards.length > visibleCount && <button className="ghost-button" onClick={() => setVisibleCount(visibleCount + 12)}>Voir les cartes suivantes ({visibleCount} / {filteredCards.length})</button>}
+    let alive = true;
+    api.review(documentFilter?.id).then(result => { if (alive) { setData(result); setError(""); } })
+      .catch(err => { if (alive) setError(String(err)); });
+    return () => { alive = false; };
+  }, [refreshKey, revision, documentFilter?.id]);
+  useEffect(() => setLimit(12), [query, documentFilter?.id, cardFilter]);
+  const items = data.items.filter(item => (!cardFilter || item.card_id === cardFilter) &&
+    `${item.label} ${item.description} ${item.target?.label ?? ""}`.toLocaleLowerCase("fr").includes(query.toLocaleLowerCase("fr")));
+  const report = documentFilter ? data.reports[0] : undefined;
+  const history = items.filter(item => ["validated", "ignored"].includes(item.status));
+  const issues = [...data.issues, ...(report?.issues ?? [])];
+  function cards(status: string) {
+    const selected = items.filter(item => item.status === status);
+    return <>{selected.length === 0 ? <p className="quiet-note">Aucun élément dans cette rubrique.</p> :
+      <div className="cards-grid">{selected.slice(0, limit).map(item =>
+        <SimpleConcept key={item.id + item.updated_at} item={item} onChanged={() => setRevision(v => v + 1)} />)}</div>}
+      {selected.length > limit && <button className="ghost-button" onClick={() => setLimit(v => v + 12)}>Voir la suite ({selected.length - limit})</button>}</>;
+  }
+  return <section className="page-stack">
+    <ActionError error={error} />
+    <details className="page-help">
+      <summary>Que dois-je faire ici ?</summary>
+      <p><strong>Nouveaux concepts :</strong> validez uniquement les notions utiles à mémoriser.</p>
+      <p><strong>Déjà reconnus :</strong> vérifiez seulement si le rattachement proposé paraît faux.</p>
+      <p><strong>À vérifier :</strong> ECUME vous indique précisément ce qu'il n'a pas réussi à confirmer.</p>
+    </details>
+    {currentDocument && <div className="document-filter"><strong>{currentDocument.filename}</strong><button className="ghost-button" onClick={onClearDocument}>Tous les documents</button></div>}
+    {cardFilter && <button className="ghost-button" onClick={onClearDocument}>Toutes les cartes</button>}
+    {currentDocument&&report&&<DocumentDomain document={currentDocument} onChanged={setCurrentDocument}/>}
+    {report && <section className="analysis-summary" aria-label="Bilan de l'analyse">
+      <h2>Bilan de l'analyse</h2><p role="status">{report.message}</p>
+      <dl className="report-counts">
+        <div><dt>Texte lu</dt><dd>{report.text_read ? "Oui" : "Non"}</dd></div>
+        <div><dt>Concepts repérés</dt><dd>{report.concepts_found}</dd></div>
+        <div><dt>Nouveaux</dt><dd>{report.new}</dd></div>
+        <div><dt>Connus dans ECUME</dt><dd>{report.known_ecume}</dd></div>
+        <div><dt>Reconnus dans Echo</dt><dd>{report.known_echo}</dd></div>
+        <div><dt>À vérifier</dt><dd>{report.review + report.issues.length}</dd></div>
+      </dl>
+      {report.analysis_problem && <p className="error">Analyse incomplète. La source est conservée pour permettre une nouvelle tentative.</p>}
+      <details className="report-help"><summary>Comment lire ce bilan ?</summary>
+        <p>« Concepts repérés » compte toutes les notions vues dans le document. Une notion déjà connue est montrée pour contrôle, mais ne crée pas de doublon. « À vérifier » regroupe uniquement les ambiguïtés et les informations qu'ECUME n'a pas pu justifier.</p>
+      </details>
+    </section>}
+    {documentFilter && !report && <p className="quiet-note">Aucun bilan détaillé enregistré pour cette ancienne analyse. Un résultat vide ne signifie pas que tous les concepts étaient déjà connus.</p>}
+    <input className="search-input" aria-label="Rechercher un concept" placeholder="Rechercher un concept" value={query} onChange={e => setQuery(e.target.value)} />
+    <section className="review-section"><h2>Nouveaux concepts proposés <small>({items.filter(i => i.status === "new").length})</small></h2>{cards("new")}</section>
+    <section className="review-section"><h2>Déjà reconnus <small>({items.filter(i => i.status === "known").length})</small></h2>{cards("known")}</section>
+    <section className="review-section"><h2>À vérifier <small>({items.filter(i => i.status === "review").length + issues.length})</small></h2>
+      {cards("review")}
+      {issues.length > 0 && <details><summary>Points de lecture à vérifier ({issues.length})</summary>{issues.map((issue, index) =>
+        <div className="analysis-issue" key={index}><p>{explainAnalysisIssue(issue.message)}</p>{issue.source_excerpt && <blockquote>{issue.source_excerpt}</blockquote>}{issue.detail && <details><summary>Détail technique</summary><p>{issue.detail}</p></details>}</div>)}</details>}
     </section>
-  );
+    <details><summary>Décisions prises ({history.length})</summary><div className="cards-grid">
+      {history.slice(0, limit).map(item => <SimpleConcept key={item.id + item.updated_at} item={item} onChanged={() => setRevision(v => v + 1)} />)}
+    </div>{history.length > limit && <button className="ghost-button" onClick={() => setLimit(v => v + 12)}>Voir la suite</button>}</details>
+    <button className="ghost-button" onClick={onOpenGraph}>Ouvrir la connaissance validée</button>
+  </section>;
 }

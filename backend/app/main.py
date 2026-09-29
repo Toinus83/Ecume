@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -12,6 +14,7 @@ from app.models.schemas import (
     KnowledgeEdgeIn,
     KnowledgeNodeIn,
     LLMSettings,
+    RDFSettings,
     ManualCardRequest,
     MergeCardRequest,
     MergeNodeRequest,
@@ -19,6 +22,7 @@ from app.models.schemas import (
     SuggestionDecision,
     ImportSettings,
     DeleteDocumentRequest,
+    DocumentDomainDecision,
     ValidationSettings,
     OrphanUpdate,
     ValidationApplyRequest,
@@ -44,10 +48,22 @@ app = FastAPI(title="ECUME API", version="0.1.0")
 
 from app.routers.references import router as references_router
 app.include_router(references_router)
+from app.routers.review import router as review_router
+app.include_router(review_router)
+
+cors_origins = [
+    value.strip()
+    for value in os.getenv(
+        "ECUME_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if value.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=cors_origins,
+    allow_origin_regex=r"^http://(?:localhost|127\.0\.0\.1):517\d$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -94,6 +110,37 @@ async def test_llm_settings() -> dict:
         raise HTTPException(status_code=400, detail=f"Test LLM impossible : {exc}") from exc
 
 
+@app.get("/admin/rdf")
+def get_rdf_settings() -> dict:
+    return admin_service.get_rdf_settings()
+
+
+@app.put("/admin/rdf")
+def update_rdf_settings(settings: RDFSettings) -> dict:
+    return admin_service.update_rdf_settings(settings)
+
+
+@app.post("/admin/rdf/test/{action}")
+async def test_rdf_settings(action: str) -> dict:
+    try:
+        return await admin_service.test_rdf_settings(action)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Test RDF impossible : {exc}") from exc
+
+
+@app.post("/admin/rdf/echo/check/{check_name}")
+def check_echo_profile(check_name: str) -> dict:
+    try:
+        return admin_service.check_echo_profile(check_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/admin/rdf/ontocast/test")
+async def test_ontocast() -> dict:
+    return await admin_service.test_ontocast()
+
+
 @app.post("/admin/database/reset")
 def reset_database(request: ResetDatabaseRequest) -> dict:
     try:
@@ -107,12 +154,20 @@ def reset_database(request: ResetDatabaseRequest) -> dict:
 
 
 @app.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...)) -> dict:
+async def upload_document(file: UploadFile = File(...), upload_id: str = Query(default="", max_length=80)) -> dict:
     try:
-        document = await document_service.save_upload(file)
+        document = await document_service.save_upload(file, upload_id)
         return document_service.document_summary(document["id"])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/imports/{upload_id}/cancel")
+def cancel_import(upload_id: str) -> dict:
+    try:
+        return document_service.request_import_cancel(upload_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/documents")
@@ -153,6 +208,14 @@ def document_retention(document_id: str, settings: ImportSettings) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.put("/documents/{document_id}/domain")
+def document_domain(document_id: str, decision: DocumentDomainDecision) -> dict:
+    try:
+        return document_service.confirm_domain(document_id, **decision.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/documents/{document_id}/purge")
 def purge_document(document_id: str) -> dict:
     try:
@@ -186,9 +249,9 @@ def get_document(document_id: str) -> dict:
 
 
 @app.post("/documents/{document_id}/analyze")
-async def analyze_document(document_id: str, settings: ValidationSettings | None = None, extraction_mode: str = Query(default="sober", pattern="^(sober|balanced|exhaustive)$")) -> dict:
+async def analyze_document(document_id: str, settings: ValidationSettings | None = None, extraction_mode: str = Query(default="sober", pattern="^(sober|balanced|exhaustive)$"), fill_mode: str | None = Query(default=None, pattern="^(manual|prefilled)$")) -> dict:
     try:
-        return job_service.start_analysis_job(document_id, settings.model_dump() if settings else None, extraction_mode=extraction_mode)
+        return job_service.start_analysis_job(document_id, settings.model_dump() if settings else None, extraction_mode=extraction_mode, fill_mode=fill_mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -204,6 +267,14 @@ def get_job(job_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="Job introuvable.")
     return job
+
+
+@app.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    try:
+        return job_service.cancel_analysis_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/cards")
@@ -396,7 +467,7 @@ def search_graph(q: str = Query(default="", max_length=200)) -> list[dict]:
 
 @app.get("/export/json")
 def export_json(scope: str = Query(default="validated", pattern="^(validated|all)$")) -> FileResponse:
-    return FileResponse(export_service.export_json(scope), filename="ecume_export.json")
+    return FileResponse(export_service.export_json(scope), filename="ecume_knowledge.json")
 
 
 @app.get("/export/jsonld")
@@ -416,10 +487,11 @@ def export_memgraph(scope: str = Query(default="validated", pattern="^(validated
     )
 
 
+@app.get("/export/ttl")
 @app.get("/export/rdf-skos")
-def export_rdf_skos() -> FileResponse:
+def export_rdf_skos(scope: str = Query(default="validated", pattern="^(validated|all)$")) -> FileResponse:
     return FileResponse(
-        export_service.export_rdf_skos_skeleton(), filename="ecume_skos_skeleton.ttl"
+        export_service.export_turtle(scope), filename="ecume_export.ttl", media_type="text/turtle"
     )
 
 
@@ -429,3 +501,9 @@ def export_archimate_json() -> FileResponse:
         export_service.export_archimate_candidates_json(),
         filename="ecume_archimate_candidates.json",
     )
+
+
+@app.get('/export/ontology-draft')
+def export_ontology_draft() -> FileResponse:
+    from app.services.ontology_draft import export_bundle
+    return FileResponse(export_bundle(), filename='ecume_ontology_review.zip')

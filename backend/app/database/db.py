@@ -242,6 +242,11 @@ def init_db() -> None:
             "content_hash": "TEXT NOT NULL DEFAULT ''",
             "content_length": "INTEGER NOT NULL DEFAULT 0",
             "source_purged_at": "TEXT",
+            "proposed_domain": "TEXT NOT NULL DEFAULT ''",
+            "confirmed_domain": "TEXT NOT NULL DEFAULT ''",
+            "secondary_domains": "TEXT NOT NULL DEFAULT '[]'",
+            "domain_status": "TEXT NOT NULL DEFAULT 'unconfirmed'",
+            "domain_evidence": "TEXT NOT NULL DEFAULT '[]'",
         }.items():
             _ensure_column(conn, "source_documents", name, definition)
         conn.execute("""CREATE TABLE IF NOT EXISTS import_settings (
@@ -263,6 +268,8 @@ def init_db() -> None:
             metadata TEXT NOT NULL DEFAULT '{}')""")
     from app.services.coherence_service import migrate
     migrate()
+    from app.services.review_service import migrate as migrate_review
+    migrate_review()
 
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:

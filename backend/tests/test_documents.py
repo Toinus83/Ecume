@@ -165,7 +165,7 @@ def test_purged_source_cannot_be_analyzed():
 def test_automatic_purge_only_after_success(monkeypatch, success):
     source = upload()
     documents.set_retention_policy(source["id"], "purge_after_success")
-    async def analyze(document_id, progress_callback, *, validation_policy=None, extraction_mode="sober"):
+    async def analyze(document_id, progress_callback, *, cancel_check=None, validation_policy=None, extraction_mode="sober"):
         if not success:
             raise ValueError("LLM indisponible")
         return {"cards": [create_card(source)], "warnings": []}

@@ -56,14 +56,21 @@ def _mapping_status(value: str | None) -> str:
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+CancelCheck = Callable[[], bool]
 
 
-async def analyze_document(document_id: str, progress_callback: ProgressCallback | None = None, *, validation_policy: dict | None = None, extraction_mode: str = "sober") -> dict:
+async def analyze_document(document_id: str, progress_callback: ProgressCallback | None = None, *, cancel_check: CancelCheck | None = None, validation_policy: dict | None = None, extraction_mode: str = "sober", fill_mode: str | None = None) -> dict:
     document = get_document(document_id)
     if not document:
         raise ValueError("Document introuvable.")
     if not document["content_text"].strip():
         raise ValueError("Texte source absent : fournis a nouveau le fichier.")
+    if fill_mode is not None:
+        from app.services.review_service import analyze
+        provider = _provider()
+        provider.extraction_mode = extraction_mode
+        return await analyze(document, provider, _chunk_text(document['content_text']), fill_mode=fill_mode,
+                             progress_callback=progress_callback, cancel_check=cancel_check)
     warnings: list[str] = []
     from app.services.validation_service import get_settings
     validation_policy = dict(validation_policy if validation_policy is not None else get_settings())
@@ -71,6 +78,8 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
     chunks = _chunk_text(document["content_text"])
     provider = _provider()
     provider.extraction_mode = extraction_mode
+    cancelled = False
+    processed_chunks = 0
     if progress_callback:
         progress_callback(
             {
@@ -81,6 +90,9 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
             }
         )
     for index, chunk in enumerate(chunks, start=1):
+        if cancel_check and cancel_check():
+            cancelled = True
+            break
         if progress_callback:
             progress_callback(
                 {
@@ -117,6 +129,7 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
         warnings.extend(analysis.get("warnings") or [])
         from app.services.salience_service import preserve_source_checks
         all_cards.extend(preserve_source_checks(analysis.get("cards") or [], chunk, index, document["id"]))
+        processed_chunks = index
         if progress_callback:
             progress_callback(
                 {
@@ -127,6 +140,9 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
                     "progress": 10 + int(index / max(len(chunks), 1) * 65),
                 }
             )
+        if cancel_check and cancel_check():
+            cancelled = True
+            break
 
     cards = []
     consolidated_cards = _consolidate_cards(all_cards)
@@ -152,16 +168,19 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
     record_change(
         entity_type="document",
         entity_id=document_id,
-        action="analyzed",
+        action="analysis_cancelled" if cancelled else "analyzed",
         origin=f"llm:{get_llm_config()['llm_provider']}",
         source_id=document_id,
-        details={"chunks": len(chunks), "cards": len(cards), "warnings": warnings},
+        details={"chunks": len(chunks), "chunks_processed": processed_chunks, "cards": len(cards),
+                 "warnings": warnings, "cancelled": cancelled},
     )
-    return {"document_id": document_id, "cards": cards, "warnings": warnings}
+    return {"document_id": document_id, "cards": cards, "warnings": warnings, "cancelled": cancelled}
 
 
 def _provider():
     settings = get_llm_config()
+    if not settings["llm_enabled"]:
+        return HeuristicProvider()
     if settings["llm_provider"] == "ollama":
         return OllamaProvider(
             base_url=str(settings["ollama_base_url"]),
@@ -209,7 +228,8 @@ def _consolidate_cards(raw_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
             card = {**card, "main_effect": main_effect}
         label = main_effect.get("label") if isinstance(main_effect, dict) else str(main_effect)
         normalized = " ".join(str(label).lower().split())
-        if not normalized:
+        from app.services.review_service import diagnostic
+        if not normalized or diagnostic(normalized):
             continue
         if normalized in seen_labels:
             previous = next(item for item in consolidated if " ".join(str((item.get("main_effect") or {}).get("label", "")).lower().split()) == normalized)
@@ -233,6 +253,12 @@ def _consolidate_cards(raw_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
 @atomic
 def _store_card(document: dict, raw_card: dict[str, Any], warnings: list[str], *, validation_policy: dict | None = None, extraction_mode: str | None = None) -> dict:
     extraction_details = {}
+    if 'simple_fields' in raw_card:
+        from app.services.business_rule_service import extract
+        fields = raw_card['simple_fields']
+        raw_card = {**raw_card, 'objects': []}
+        extraction_details = {'managed':True, 'include_theme':False, 'simple_fields':fields, 'concepts':[],
+                              'business_rules':raw_card.get('business_rules',[]) or extract(raw_card), 'force_new':raw_card.get('force_new',False)}
     if extraction_mode is not None:
         from app.services.salience_service import prepare
         raw_card, extraction_details = prepare(raw_card, extraction_mode)
@@ -430,11 +456,16 @@ def _materialize_proposed_graph(document: dict, card: dict) -> dict[str, Any]:
             archimate_mapping=card["archimate_mapping"],
             archimate_mapping_status=card["archimate_mapping_status"],
             ontology_mapping_status=card["ontology_mapping_status"],
-            metadata={"card_id": card["id"], "source_excerpt": card["source_excerpt"], "origin": "import"},
+            metadata={"card_id": card["id"], "source_excerpt": card["source_excerpt"], "origin": "import", "force_new":card.get('extraction_details',{}).get('force_new',False)},
         )
     )
     _append_dedupe_suggestions(card, card["main_effect"]["label"], effect)
     node_ids["effect"] = effect["id"]
+    if 'simple_fields' in card.get('extraction_details', {}):
+        from app.services.review_graph import materialize_fields
+        node_ids['theme'] = ''
+        node_ids['objects'] = materialize_fields(card, effect['id'])
+        return node_ids
     if card.get("extraction_details", {}).get("managed"):
         node_ids["theme"] = ""
     else:

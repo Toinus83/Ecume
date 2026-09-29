@@ -4,11 +4,11 @@ Les exports ECUME sont concus pour etre lisibles hors de l'application. Un conce
 
 ## Quel Export Utiliser
 
-- `JSON` : connaissance validee par defaut ; archive complete disponible avec `scope=all`.
+- `JSON maître ECUME` : connaissance validee par defaut ; archive complete disponible avec `scope=all`.
 - `JSON-LD` : pivot Linked Data simple, pour preparer une integration RDF, GraphDB ou outil de mapping semantique.
 - `CSV` : tables lisibles dans un tableur ou un pipeline de donnees.
 - `Memgraph` : CSV + script Cypher pour charger le graphe dans Memgraph.
-- `RDF/SKOS` : squelette minimal, non ontologique, utile pour tester une premiere projection SKOS.
+- `Turtle / RDF (.ttl)` : graphe valide avec concepts SKOS, relations orientees, documents et provenance.
 - `ArchiMate JSON` : lot intermediaire prudent pour controler les mappings candidats avant un futur export ArchiMate Exchange XML.
 
 ## JSON Complet
@@ -21,7 +21,7 @@ Pour obtenir une archive complete comprenant aussi propositions, rejets et decis
 `http://127.0.0.1:8000/export/json?scope=all`. Le champ `export_metadata.scope` indique la portee.
 Cette archive est un fichier de donnees ; ECUME ne propose pas encore de restauration automatique depuis ce JSON.
 
-Le fichier `ecume_export.json` contient :
+Le fichier `ecume_knowledge.json` contient :
 
 - `export_metadata` : version d'export, date, types de relations, URI stables et notes de mapping ;
 - `documents` : documents sources, titres, fichiers, type, texte extrait, apercu et metadonnees ;
@@ -53,6 +53,60 @@ Le `@context` reste volontairement simple. ECUME n'affirme pas encore une ontolo
 
 Le contexte JSON-LD 1.1 definit un vocabulaire ECUME par defaut pour conserver les champs imbriques du mapping.
 Les cartes, l'historique et le manifeste sont aussi inclus ; leurs enregistrements complets sont preserves comme valeurs JSON typees (`@json`).
+
+## Turtle / RDF
+
+Le fichier `ecume_export.ttl` reprend les URI stables de JSON-LD. Il contient les documents sources,
+les concepts avec leurs libelles, synonymes, definitions, categories et statuts, ainsi que les relations
+orientees avec leur provenance. Il s'agit d'une projection RDF generique du graphe ECUME, distincte des
+propositions OWL/VOC/SHACL destinees a un referentiel Echo determine.
+
+L'endpoint principal est `/export/ttl`. L'ancien endpoint `/export/rdf-skos` reste disponible pour compatibilite.
+Comme les autres exports, il utilise la connaissance validee par defaut et accepte `scope=all` pour une archive elargie.
+
+### Distinction avec le futur lot Echo
+
+`ecume_export.ttl` est un export RDF generique du graphe ECUME. Il ne suit pas a lui seul les conventions
+OWL, VOC et SHACL d'un profil Echo particulier et ne doit donc pas etre integre comme un lot Echo conforme.
+
+Un futur exporteur Echo, pilote par le domaine confirme et par les gabarits du referentiel charge, produira
+trois fichiers distincts :
+
+- `echo_[domaine]_enrichment.owl.ttl` pour les propositions de concepts, classes et relations ;
+- `echo_[domaine]_enrichment.voc.ttl` pour les termes, definitions et synonymes proposes ;
+- `echo_[domaine]_enrichment.shacl.ttl` pour les regles et contraintes proposees.
+
+Ces trois fichiers ne sont pas encore produits dans cette version. Les sorties Echo JSON et ZIP CSV actuelles
+sont des outils experimentaux de controle humain, pas des substituts conformes a ces fichiers TTL.
+
+Les trois gabarits fournis constituent le contrat de structure du futur exporteur, et non de simples exemples.
+L'exporteur devra adapter les URI et prefixes au domaine confirme par l'utilisateur, sans coder en dur un domaine
+particulier. Le paquet cible comprendra egalement `manifest.json`, `control_report.html` et `proposals.csv` afin
+de distinguer l'existant reconnu, les enrichissements, les nouveautes, les regles non formalisables et les cas
+a revoir. ECUME ne modifiera jamais directement les fichiers du referentiel charge.
+
+La conformite Echo depend du referentiel reellement charge. ECUME adapte ses propositions au profil detecte et aux gabarits fournis, mais le lot reste soumis a revue humaine avant integration dans la reference centrale.
+
+## Lot de revue OWL / VOC / SHACL
+
+L'endpoint `/export/ontology-draft` produit `ecume_ontology_review.zip`. Ce paquet contient :
+
+- `ecume_draft.owl.ttl` : uniquement les classes OWL candidates suffisamment qualifiees ;
+- `ecume_draft.voc.ttl` : concepts, definitions et synonymes SKOS candidats ;
+- `ecume_draft.shacl.ttl` : uniquement les contraintes formalisables, ou les metadonnees du brouillon si aucune ne l'est ;
+- `ecume_knowledge.json` : pivot complet et tracable ;
+- `manifest.json` : perimetre, domaine, compteurs, fichiers et avertissements ;
+- `proposals.csv` : tableau de decision pour l'ontologue ;
+- `control_report.html` : rapport de controle lisible ;
+- `README.txt` : limites et consignes de revue.
+
+**Proposition à revoir — pas une ontologie approuvée.**
+**Revue humaine avant tout réimport.**
+**Aucun fichier référentiel source modifié.**
+
+Une variante lexicale devient un `skos:altLabel` candidat et ne cree pas automatiquement un nouveau concept.
+Une regle sans classe cible, propriete et contrainte structuree reste dans `proposals.csv` comme
+`regle_metier` non formalisee ; ECUME n'invente pas de shape SHACL.
 
 ## CSV
 
@@ -138,6 +192,15 @@ Le fichier `memgraph_import.cypher` fourni contient une version plus complete av
 Les fichiers CSV doivent etre accessibles au serveur Memgraph (et montes dans son conteneur si necessaire).
 Le script utilise les identifiants stables des noeuds et relations avec `MERGE` : reimporter le meme lot ne cree pas de doublons.
 Il ne supprime pas les donnees deja chargees qui sont absentes d'un export suivant. Pour comparer des instantanes complets apres des rejets ou suppressions, utiliser une base de test vide ou gerer explicitement les retraits cote cible.
+
+## Inspection RDF et Ontosphere
+
+Les fichiers RDF/Turtle produits par ECUME doivent pouvoir etre charges dans un outil RDF
+ou visualises dans un outil comme Ontosphere. Ils restent des propositions de revue, pas
+une ontologie de reference approuvee. Lorsque Fuseki est active, la page Export affiche
+les URI configurees pour les graphes `candidates`, `validated`, `rejected`, `provenance`
+et `review`. Cet affichage est informatif : le connecteur preparatoire actuel ne realise
+aucun SPARQL Update.
 
 ## Export ArchiMate JSON
 

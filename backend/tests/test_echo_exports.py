@@ -85,7 +85,7 @@ def test_csv_bundle_contains_review_files_json_and_report_and_escapes_formulas()
     with zipfile.ZipFile(exports.export_csv(reference['id'])) as bundle:
         assert set(bundle.namelist())=={'echo_new_concepts.csv','echo_enrichments.csv','echo_mappings.csv','echo_relations.csv',
             'echo_warnings.csv','echo_enrichment.json','echo_control_report.json','README.txt',
-            'echo_recognized_existing.csv','echo_new_voc_terms.csv','echo_rules.csv','echo_shacl_report.csv'}
+            'echo_recognized_existing.csv','echo_new_voc_terms.csv','echo_rules.csv','echo_shacl_report.csv','echo_document_mentions.csv'}
         rows = list(csv.DictReader(io.StringIO(bundle.read('echo_new_concepts.csv').decode('utf-8-sig'))))
         assert any(row['label'].startswith("'=HYPERLINK") for row in rows)
         payload = json.loads(bundle.read('echo_enrichment.json'))

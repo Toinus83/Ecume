@@ -1,6 +1,60 @@
 # ECUME
 
-ECUME est un MVP local de capitalisation de connaissance métier sur la couche usage. Il importe des documents, propose des cartes d'effets, enrichit un graphe SQLite au fil des imports et exporte les données vers des formats simples.
+## ECUME en bref
+
+ECUME est une interface metier de validation de connaissances extraites de documents.
+Il permet d'importer et analyser un document, de proposer des concepts metier, de
+confirmer leur domaine, de les corriger, valider ou ignorer, puis de produire un graphe,
+des exports reutilisables et un lot de revue ontologique.
+
+L'architecture cible separe clairement les responsabilites :
+
+- **ECUME** : interface metier de proposition et de validation ;
+- **Echo** : referentiels OWL, VOC et SHACL ;
+- **Fuseki** : stockage RDF et interrogation SPARQL ;
+- **OntoCast** : extraction RDF guidee depuis les documents ;
+- **Ontosphere**, ou un outil equivalent : revue technique du graphe ;
+- **LLM distant** : service facultatif, jamais obligatoire pour demarrer ECUME.
+
+```text
+Document
+  -> ECUME
+  -> concepts metier
+  -> validation expert
+  -> graphe
+  -> exports JSON / RDF / lot de revue
+  -> integration eventuelle dans Echo apres revue humaine
+```
+
+Echo, Fuseki, OntoCast et Ontosphere sont optionnels et configurables dans **Admin**.
+Le mode local est disponible par defaut avec SQLite et une analyse locale simple.
+
+ECUME est concu pour s'integrer dans une architecture RDF existante. Il peut fonctionner
+seul en mode local, mais sa cible est de s'interfacer avec Echo pour les referentiels
+OWL/VOC/SHACL, Fuseki pour le stockage RDF/SPARQL, OntoCast pour l'extraction RDF guidee
+par ontologie et Ontosphere, ou un outil equivalent, pour la revue technique des graphes.
+ECUME conserve son role principal : interface metier de validation. Les services externes
+sont desactives par defaut et aucun graphe Echo n'est modifie directement. Voir
+[l'architecture RDF cible](docs/architecture-rdf.md) et le
+[contrat preparatoire OntoCast](docs/ontocast-integration.md). Le
+[guide de configuration](docs/configuration.md) decrit tous les modes sans exposer de
+secret dans le depot.
+
+## Conteneur et recette hors ligne
+
+Le [guide Docker et Kubernetes](docs/deployment.md) couvre le lancement avec deux
+conteneurs, la configuration runtime du frontend, les secrets et le deploiement
+Kubernetes. Les manifestes commentes se trouvent dans [`k8s/`](k8s/README.md).
+
+Le [guide de deploiement hors ligne](docs/deploiement-hors-ligne.md) explique
+comment preparer un conteneur unique frontend + backend, le transferer sous forme
+d'image TAR puis le demarrer sans Internet. Le LLM reste un service interne separe.
+Le script [package-offline.py](scripts/package-offline.py) construit et teste l'image
+sans reseau avant de produire le dossier de livraison. Docker est requis sur le poste
+de construction et sur la cible ; aucune donnee locale n'est incluse dans l'image.
+
+La [fiche de tache utilisateur](docs/fiche-tache-utilisateur.md) explique les champs,
+actions et verifications du parcours metier.
 
 ## Pilotage des imports et validation
 
@@ -243,7 +297,7 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-github.ps1
 4. Consulte les cartes d'effets une fois le job terminé.
 5. Valide, corrige, fusionne ou rattache les cartes.
 6. Visualise le graphe et les orphelins.
-7. Exporte en JSON, JSON-LD, CSV ou Memgraph. Les formats sont détaillés dans `docs/exports.md`.
+7. Exporte le JSON maître `ecume_knowledge.json`, le Turtle générique, les CSV ou un lot de revue ontologique. Le Turtle actuel ne constitue pas un lot Echo OWL/VOC/SHACL conforme. Les formats et leurs limites sont détaillés dans `docs/exports.md`.
 8. Utilise l'onglet Admin pour changer de fournisseur LLM, supprimer des concepts ou réinitialiser la base.
 
 Si Ollama ne répond pas, ECUME affiche une erreur claire. Tu peux réessayer l'analyse ou créer une carte manuellement.
@@ -318,6 +372,17 @@ Une correspondance, meme a 100 %, reste candidate jusqu'a une decision humaine.
 Le **lot d'enrichissement Echo** fournit un JSON autonome et un ZIP de CSV de controle,
 avec sources, statuts, propositions et rapport de limites. Il doit etre relu avant tout
 reimport externe : ECUME n'est pas le referentiel central.
+
+Le **lot de revue ontologique ECUME** contient `ecume_draft.owl.ttl`,
+`ecume_draft.voc.ttl`, `ecume_draft.shacl.ttl`, `manifest.json`, `proposals.csv`,
+`control_report.html`, un README et le JSON maître. Ces fichiers portent toujours les
+avertissements suivants :
+
+- **Proposition à revoir — pas une ontologie approuvée.**
+- **Revue humaine avant tout réimport.**
+- **Aucun fichier référentiel source modifié.**
+
+Ce lot de revue n'est pas le futur lot Echo conforme aux trois gabarits fournis.
 
 Voir le [guide Echo](docs/echo.md) et la [recette Echo](docs/recette-echo.md).
 Apres une mise a jour du code, arreter ECUME, relancer

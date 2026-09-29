@@ -24,7 +24,7 @@ RELATION_DESCRIPTIONS = {
 
 def export_json(scope: str = "validated") -> Path:
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    path = EXPORT_DIR / "ecume_export.json"
+    path = EXPORT_DIR / "ecume_knowledge.json"
     payload = _complete_export_payload(scope)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
@@ -142,7 +142,8 @@ def export_jsonld(scope: str = "validated") -> Path:
         }
         for edge in payload["edges"]
     )
-    for kind, records in (("card", payload["cards"]), ("change", payload["changelog"])):
+    for kind, records in (("card", payload["cards"]), ("change", payload["changelog"]),
+                          ("mention",payload['document_mentions']), ("analysis",payload['analysis_reports'])):
         jsonld["@graph"].extend({"@id": f"urn:ecume:{kind}:{record['id']}",
                                 "@type": f"ecume:{kind}", "record": record} for record in records)
     jsonld["@graph"].append({"@id": "urn:ecume:export:manifest", "@type": "ecume:Export",
@@ -188,34 +189,73 @@ def export_memgraph_bundle(scope: str = "validated") -> Path:
     return zip_path
 
 
-def export_rdf_skos_skeleton() -> Path:
+def export_turtle(scope: str = "validated") -> Path:
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    path = EXPORT_DIR / "ecume_skos_skeleton.ttl"
-    payload = _complete_export_payload()
+    path = EXPORT_DIR / "ecume_export.ttl"
+    payload = _complete_export_payload(scope)
     lines = [
         "@prefix ecume: <urn:ecume:vocab:> .",
         "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .",
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+        "@prefix dcterms: <http://purl.org/dc/terms/> .",
+        "@prefix prov: <http://www.w3.org/ns/prov#> .",
         "",
     ]
+    for document in payload["documents"]:
+        uri = f"<urn:ecume:document:{document['id']}>"
+        lines.extend([
+            f"{uri} a ecume:SourceDocument ;",
+            f'  dcterms:title "{_ttl_escape(document["title"] or document["filename"])}" ;',
+            f'  dcterms:identifier "{_ttl_escape(document["id"])}" ;',
+            f'  ecume:sourceStatus "{_ttl_escape(document.get("source_status", ""))}" ;',
+            f'  ecume:createdAt "{_ttl_escape(document.get("created_at", ""))}" .',
+            "",
+        ])
     for node in payload["nodes"]:
         uri = f"<urn:ecume:node:{node['id']}>"
+        properties = [
+            f'a skos:Concept',
+            f'skos:prefLabel "{_ttl_escape(node["canonical_label"] or node["label"])}"',
+            *[f'skos:altLabel "{_ttl_escape(alias["label"])}"' for alias in node["aliases"] if alias.get("label")],
+            f'skos:definition "{_ttl_escape(node["description"] or node["label"])}"',
+            f'ecume:type "{_ttl_escape(node["type"])}"',
+            f'ecume:businessCategory "{_ttl_escape(node.get("business_category", "non_qualifie"))}"',
+            f'ecume:level "{_ttl_escape(node["level"])}"',
+            f'ecume:status "{_ttl_escape(node["status"])}"',
+            f'ecume:confidence "{_ttl_escape(node["confidence"])}"',
+            *[f'dcterms:source <urn:ecume:document:{source_id}>' for source_id in node.get("source_ids", [])],
+            f'ecume:createdAt "{_ttl_escape(node.get("created_at", ""))}"',
+            f'ecume:updatedAt "{_ttl_escape(node.get("updated_at", ""))}"',
+        ]
         lines.extend(
             [
-                f"{uri} a skos:Concept ;",
-                f'  skos:prefLabel "{_ttl_escape(node["canonical_label"])}" ;',
-                *[
-                    f'  skos:altLabel "{_ttl_escape(alias["label"])}" ;'
-                    for alias in node["aliases"]
-                ],
-                f'  skos:definition "{_ttl_escape(node["description"] or node["label"])}" ;',
-                f'  ecume:type "{node["type"]}" ;',
-                f'  ecume:level "{node["level"]}" ;',
-                f'  ecume:status "{node["status"]}" .',
+                f"{uri} " + " ;\n  ".join(properties) + " .",
                 "",
             ]
         )
+    for edge in payload["edges"]:
+        uri = f"<urn:ecume:edge:{edge['id']}>"
+        properties = [
+            "a ecume:Relation",
+            f'ecume:source <urn:ecume:node:{edge["source_node_id"]}>',
+            f'ecume:target <urn:ecume:node:{edge["target_node_id"]}>',
+            f'ecume:relationType "{_ttl_escape(edge["relation_type"])}"',
+            f'rdfs:label "{_ttl_escape(edge["label"] or edge["relation_type"])}"',
+            f'ecume:direction "{_ttl_escape(edge["direction"])}"',
+            f'ecume:status "{_ttl_escape(edge["status"])}"',
+            f'ecume:confidence "{_ttl_escape(edge["confidence"])}"',
+            *[f'dcterms:source <urn:ecume:document:{source_id}>' for source_id in edge.get("source_ids", [])],
+            f'ecume:createdAt "{_ttl_escape(edge.get("created_at", ""))}"',
+            f'ecume:updatedAt "{_ttl_escape(edge.get("updated_at", ""))}"',
+        ]
+        lines.extend([f"{uri} " + " ;\n  ".join(properties) + " .", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
+
+
+def export_rdf_skos_skeleton() -> Path:
+    """Backward-compatible alias for integrations using the former endpoint."""
+    return export_turtle()
 
 
 def export_archimate_candidates_json() -> Path:
@@ -290,6 +330,13 @@ def _complete_export_payload(scope: str = "validated") -> dict:
     doc_by_id = {doc["id"]: doc for doc in documents}
     node_by_id = {node["id"]: node for node in nodes}
     card_by_id = {card["id"]: card for card in cards}
+    from app.services.review_service import workspace
+    review = workspace()
+    mentions = [item for item in review['items'] if not item['id'].startswith('legacy:') and
+                (scope == 'all' or item['status'] == 'known' or (item['status'] == 'validated' and item['node_id'] in node_by_id))]
+    for node in nodes:
+        recognized = [m for m in mentions if m['status'] == 'known' and m['node_id'] == node['id']]
+        node['source_ids'] = list(dict.fromkeys([*node.get('source_ids',[]), *(m['document_id'] for m in recognized)]))
 
     enriched_nodes = [
         _enrich_node(node, aliases_by_node.get(node["id"], []), doc_by_id, card_by_id)
@@ -323,10 +370,12 @@ def _complete_export_payload(scope: str = "validated") -> dict:
         "nodes": enriched_nodes,
         "edges": enriched_edges,
         "changelog": changelog,
+        "document_mentions": mentions,
+        "analysis_reports": review['reports'],
         "mappings": {
             "relation_descriptions": RELATION_DESCRIPTIONS,
             "node_types": {
-                "effect": "Effet métier à atteindre ou maintenir.",
+                "effect": "Concept principal d'une carte (type historique effect), a lire avec sa categorie metier.",
                 "object": "Objet métier concerné.",
                 "action": "Action exercée ou proposée.",
                 "condition": "Condition d'application ou de déclenchement.",
@@ -346,6 +395,9 @@ def _complete_export_payload(scope: str = "validated") -> dict:
                 "role_tenu": "Fonction assumee dans un contexte.",
                 "service_rendu": "Capacite fournie a un utilisateur ou a un metier.",
                 "service_applicatif": "Service fourni par une application.",
+                "application_outil": "Application ou outil numerique identifiable.",
+                "lieu_environnement_physique": "Lieu, batiment, zone ou environnement physique.",
+                "ressource_metier": "Moyen ou actif controle et mobilise par le metier.",
                 "element_technique": "Element technique utile au fonctionnement.",
                 "non_qualifie": "Categorie encore incertaine.",
             },

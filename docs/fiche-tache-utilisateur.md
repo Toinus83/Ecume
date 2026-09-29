@@ -335,13 +335,27 @@ Le graphe principal privilégie les concepts principaux validés, les secondaire
 
 | Export | Usage et précaution |
 | --- | --- |
-| Graphe validé : JSON | Réutilisation structurée de la connaissance validée avec ses métadonnées. |
+| JSON maître ECUME (`ecume_knowledge.json`) | Réutilisation structurée de la connaissance validée avec ses métadonnées, décisions, sources et mappings candidats. |
 | Archive JSON complète | Périmètre plus large, avec les propositions et états conservés par l'export. Ne pas la confondre avec le seul graphe validé ni avec une sauvegarde intégrale du dossier `data/`. |
 | JSON-LD | Données liées avec identifiants et contexte ; ne constitue pas à lui seul une ontologie complète. |
 | CSV | Inspection tabulaire des nœuds et relations. |
 | Memgraph | Échange vers le graphe de propriétés ; suivre les instructions du paquet et du guide exports. |
-| RDF/SKOS | Export générique disponible ; à distinguer d'un export conforme au modèle Echo, non livré dans ce lot. |
+| Turtle / RDF (.ttl) | Graphe ECUME avec concepts, relations, documents et provenance ; à distinguer d'un lot d'enrichissement Echo. |
 | ArchiMate JSON | Représentation intermédiaire de mappings candidats ; pas un fichier ArchiMate Exchange XML. |
+| Lot de revue OWL/VOC/SHACL | Brouillons `ecume_draft.*.ttl`, manifeste, propositions CSV et rapport HTML. Revue humaine obligatoire. |
+
+Le fichier `ecume_export.ttl` est un RDF générique ECUME. Il n'est pas conforme, à lui seul, aux gabarits
+OWL/VOC/SHACL d'un domaine Echo. Le futur lot Echo conforme devra produire séparément :
+
+- `echo_[domaine]_enrichment.owl.ttl` ;
+- `echo_[domaine]_enrichment.voc.ttl` ;
+- `echo_[domaine]_enrichment.shacl.ttl`.
+
+Ces trois fichiers ne sont pas encore disponibles dans cette version. Les exports Echo JSON et ZIP CSV
+servent actuellement à contrôler les propositions, sans modifier le référentiel source.
+Les gabarits fournis seront le contrat de structure du futur exporteur, piloté par le domaine confirmé et non
+par un nom de domaine codé en dur. Le paquet cible ajoutera `manifest.json`, `control_report.html` et
+`proposals.csv` pour rendre la revue humaine explicite.
 
 ### Lot d'enrichissement Echo
 
@@ -365,6 +379,8 @@ Le graphe principal privilégie les concepts principaux validés, les secondaire
 | ZIP CSV | Tableaux de contrôle humain, JSON et rapport ; le JSON reste la représentation complète. |
 
 **ECUME ne réimporte rien automatiquement dans Echo et ne modifie jamais les fichiers sources.** Un lot exportable n'est pas un lot autorisé à entrer sans contrôle dans la référence centrale.
+
+**La conformité Echo dépend du référentiel réellement chargé. ECUME adapte ses propositions au profil détecté et aux gabarits fournis, mais le lot reste soumis à revue humaine avant intégration dans la référence centrale.**
 
 ## 11. Purger, rejeter, supprimer : choisir la bonne action
 

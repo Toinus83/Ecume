@@ -73,7 +73,31 @@ def test_export_json_and_memgraph_csv():
     json_path = export_service.export_json()
     memgraph_path = export_service.export_memgraph_bundle()
     assert json_path.exists()
+    assert json_path.name == "ecume_knowledge.json"
     assert memgraph_path.exists()
     with zipfile.ZipFile(memgraph_path) as bundle:
         names = set(bundle.namelist())
     assert {"memgraph_nodes.csv", "memgraph_edges.csv", "memgraph_import.cypher"} <= names
+    with TestClient(app) as client:
+        response = client.get("/export/json")
+    assert response.status_code == 200
+    assert "ecume_knowledge.json" in response.headers["content-disposition"]
+
+
+def test_turtle_export_is_parseable_and_keeps_directed_relations():
+    from rdflib import Graph, URIRef
+    first = graph_service.create_node(KnowledgeNodeIn(label="Produire un bulletin", type="action", status="accepted", business_validation_status="validated_by_user"))
+    second = graph_service.create_node(KnowledgeNodeIn(label="Bulletin meteo", type="object", status="accepted", business_validation_status="validated_by_user"))
+    edge = graph_service.create_edge(
+        KnowledgeEdgeIn(source_node_id=first["id"], target_node_id=second["id"], relation_type="concerne", status="accepted")
+    )
+    path = export_service.export_turtle()
+    graph = Graph().parse(path, format="turtle")
+    edge_uri = URIRef(f"urn:ecume:edge:{edge['id']}")
+    assert path.name == "ecume_export.ttl"
+    assert (edge_uri, URIRef("urn:ecume:vocab:source"), URIRef(f"urn:ecume:node:{first['id']}")) in graph
+    assert (edge_uri, URIRef("urn:ecume:vocab:target"), URIRef(f"urn:ecume:node:{second['id']}")) in graph
+    with TestClient(app) as client:
+        response = client.get("/export/ttl")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/turtle")

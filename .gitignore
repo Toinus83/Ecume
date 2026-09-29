@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+k8s/secret.local.yaml
+**/secret.local.yaml
 *.pem
 *.key
 .venv/
@@ -16,6 +18,9 @@ data/
 data/uploads/
 data/exports/
 data/ecume.db
+uploads/
+exports/
+logs/
 data/*.db
 *.db
 *.db-wal
@@ -40,13 +45,25 @@ data/*.db
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+.vite/
 frontend/dev.log
 frontend/dev.err
 npm-debug.log*
 
+# Artefacts de recette et captures locales
+captures/
+screenshots/
+playwright-report/
+test-results/
+
 # Logs locaux
 backend/dev-backend.*.log
 *.log
+
+# Images and offline delivery bundles (never user data in a release)
+dist-offline/
+*.tar
+*.tar.gz
 
 # Système / éditeurs
 .DS_Store

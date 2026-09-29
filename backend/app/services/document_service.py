@@ -15,9 +15,36 @@ from app.services.serialization import row_to_dict, rows_to_dicts
 
 
 SUPPORTED_TEXT_TYPES = {".txt", ".md"}
+_ACTIVE_IMPORTS: set[str] = set()
+_CANCELLED_IMPORTS: set[str] = set()
+DOMAIN_KEYWORDS = {
+    "RH": ("ressources humaines", "recrutement", "emploi", "personnel", "formation", "compétence", "carrière"),
+    "METEO": ("météo", "meteorologie", "prévision", "vent", "température", "pression", "précipitation"),
+    "OPERATIONS": ("opération", "mission", "doctrine", "engagement", "commandement", "situation tactique"),
+    "LOGISTIQUE": ("logistique", "approvisionnement", "stock", "transport", "maintenance", "ravitaillement"),
+    "C2": ("commandement et contrôle", "c2", "coordination", "chaîne de commandement", "conduite des opérations"),
+    "URBANISME": ("urbanisme", "permis de construire", "plu", "zone urbaine", "aménagement", "construction"),
+}
 
 
-def _extract_text(path: Path, extension: str) -> str:
+def request_import_cancel(upload_id: str) -> dict:
+    if not upload_id:
+        raise ValueError("Import introuvable.")
+    _CANCELLED_IMPORTS.add(upload_id)
+    return {"status": "cancelling" if upload_id in _ACTIVE_IMPORTS else "cancel_requested"}
+
+
+def _cancelled(upload_id: str) -> bool:
+    return bool(upload_id and upload_id in _CANCELLED_IMPORTS)
+
+
+def _check_import(upload_id: str) -> None:
+    if _cancelled(upload_id):
+        raise ValueError("Import arrêté à la demande de l’utilisateur.")
+
+
+def _extract_text(path: Path, extension: str, upload_id: str = "") -> str:
+    _check_import(upload_id)
     if extension in SUPPORTED_TEXT_TYPES:
         return path.read_text(encoding="utf-8", errors="replace")
     if extension == ".pdf":
@@ -25,7 +52,11 @@ def _extract_text(path: Path, extension: str) -> str:
             from pypdf import PdfReader
 
             reader = PdfReader(str(path))
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
+            pages = []
+            for page in reader.pages:
+                _check_import(upload_id)
+                pages.append(page.extract_text() or "")
+            return "\n".join(pages)
         except Exception as exc:
             raise ValueError(f"Impossible d'extraire le texte du PDF : {exc}") from exc
     if extension == ".docx":
@@ -33,38 +64,53 @@ def _extract_text(path: Path, extension: str) -> str:
             from docx import Document
 
             doc = Document(str(path))
-            return "\n".join(paragraph.text for paragraph in doc.paragraphs)
+            paragraphs = []
+            for paragraph in doc.paragraphs:
+                _check_import(upload_id)
+                paragraphs.append(paragraph.text)
+            return "\n".join(paragraphs)
         except Exception as exc:
             raise ValueError(f"Impossible d'extraire le texte du DOCX : {exc}") from exc
     raise ValueError("Format non supporté pour le MVP. Utilise .txt, .md, .pdf ou .docx.")
 
 
-async def save_upload(file: UploadFile) -> dict:
+async def save_upload(file: UploadFile, upload_id: str = "") -> dict:
     from starlette.concurrency import run_in_threadpool
-    return await run_in_threadpool(_save_upload, file)
+    return await run_in_threadpool(_save_upload, file, upload_id)
 
 
-def _save_upload(file: UploadFile) -> dict:
+def _save_upload(file: UploadFile, upload_id: str = "") -> dict:
     if not file.filename:
         raise ValueError("Nom de fichier absent.")
     extension = Path(file.filename).suffix.lower()
     if extension not in {".txt", ".md", ".pdf", ".docx"}:
         raise ValueError("Format non supporté pour le MVP. Utilise .txt, .md, .pdf ou .docx.")
 
+    upload_id = upload_id or str(uuid.uuid4())
+    _ACTIVE_IMPORTS.add(upload_id)
     document_id = str(uuid.uuid4())
     stored_name = f"{document_id}{extension}"
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     stored_path = UPLOAD_DIR / stored_name
     try:
         with stored_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        content_text = _extract_text(stored_path, extension).strip()
+            while True:
+                _check_import(upload_id)
+                block = file.file.read(1024 * 1024)
+                if not block:
+                    break
+                buffer.write(block)
+        _check_import(upload_id)
+        content_text = _extract_text(stored_path, extension, upload_id).strip()
         if not content_text:
             raise ValueError("Aucun texte exploitable n'a été extrait du document.")
         digest = _file_hash(stored_path)
     except Exception:
         stored_path.unlink(missing_ok=True)
         raise
+    finally:
+        _ACTIVE_IMPORTS.discard(upload_id)
+        _CANCELLED_IMPORTS.discard(upload_id)
 
     title = Path(file.filename).stem.replace("_", " ").replace("-", " ").strip() or file.filename
     created_at = now_iso()
@@ -157,7 +203,7 @@ def _require_document(document_id: str) -> dict:
 
 def assert_document_idle(document_id: str) -> None:
     with get_db() as conn:
-        active = conn.execute("SELECT 1 FROM analysis_jobs WHERE document_id = ? AND status IN ('queued', 'running')",
+        active = conn.execute("SELECT 1 FROM analysis_jobs WHERE document_id = ? AND status IN ('queued', 'running', 'cancelling')",
                               (document_id,)).fetchone()
     if active:
         raise ValueError("Une analyse est en cours pour ce document. Attends sa fin.")
@@ -174,10 +220,68 @@ def set_retention_policy(document_id: str, policy: str) -> dict:
     return document_summary(document_id)
 
 
+def propose_domain(document_id: str) -> dict:
+    from app.services.graph_service import _normalize
+    document = _require_document(document_id)
+    text = _normalize(document.get("content_text", ""))
+    evidence = []
+    with get_db() as conn:
+        repositories = conn.execute("SELECT id,name FROM reference_repositories WHERE active=1").fetchall()
+        for repository in repositories:
+            matches = []
+            for term in conn.execute("SELECT label,aliases FROM reference_terms WHERE repository_id=?", (repository["id"],)):
+                labels = [term["label"], *json.loads(term["aliases"] or "[]")]
+                found = next((label for label in labels if len(_normalize(label)) >= 3 and _normalize(label) in text), "")
+                if found:
+                    matches.append(found)
+                if len(matches) >= 12:
+                    break
+            if matches:
+                evidence.append({"domain": repository["name"], "source": "référentiel reconnu",
+                                 "terms": matches[:5], "score": min(0.95, 0.55 + len(matches) * 0.04)})
+    for domain, keywords in DOMAIN_KEYWORDS.items():
+        matches = [keyword for keyword in keywords if _normalize(keyword) in text]
+        if matches:
+            evidence.append({"domain": domain, "source": "mots-clés du document",
+                             "terms": matches[:5], "score": min(0.85, 0.45 + len(matches) * 0.08)})
+    evidence.sort(key=lambda item: (-item["score"], item["domain"].casefold()))
+    proposed = evidence[0]["domain"] if evidence else "Domaine à préciser"
+    with transaction() as conn:
+        current = conn.execute("SELECT domain_status FROM source_documents WHERE id=?", (document_id,)).fetchone()
+        if current and current["domain_status"] != "confirmed":
+            conn.execute("UPDATE source_documents SET proposed_domain=?, domain_evidence=? WHERE id=?",
+                         (proposed, json.dumps(evidence, ensure_ascii=False), document_id))
+            record_change(entity_type="document", entity_id=document_id, action="domain_proposed",
+                          origin="analysis", source_id=document_id,
+                          details={"proposed_domain": proposed, "evidence": evidence})
+    return document_summary(document_id)
+
+
+def confirm_domain(document_id: str, confirmed_domain: str, secondary_domains: list[str],
+                   no_suitable_reference: bool = False) -> dict:
+    document = _require_document(document_id)
+    domain = confirmed_domain.strip()[:160]
+    secondary = list(dict.fromkeys(value.strip()[:160] for value in secondary_domains if value.strip()))[:8]
+    if not domain and not no_suitable_reference:
+        raise ValueError("Choisis un domaine ou indique qu'aucun référentiel n'est adapté.")
+    if no_suitable_reference and not domain:
+        domain = document.get("proposed_domain") or "Domaine métier sans référentiel"
+    with transaction() as conn:
+        conn.execute("""UPDATE source_documents SET confirmed_domain=?, secondary_domains=?,
+            domain_status=? WHERE id=?""", (domain, json.dumps(secondary, ensure_ascii=False),
+            "no_reference" if no_suitable_reference else "confirmed", document_id))
+        record_change(entity_type="document", entity_id=document_id, action="domain_confirmed",
+                      origin="user", source_id=document_id,
+                      details={"confirmed_domain": domain, "secondary_domains": secondary,
+                               "no_suitable_reference": no_suitable_reference})
+    return document_summary(document_id)
+
+
 def document_summary(document_id: str) -> dict:
     with get_db() as conn:
         row = conn.execute("""SELECT id, title, filename, file_type, created_at, metadata,
             source_status, retention_policy, content_hash, content_length, source_purged_at,
+            proposed_domain, confirmed_domain, secondary_domains, domain_status, domain_evidence,
             length(content_text) AS text_length FROM source_documents WHERE id = ?""", (document_id,)).fetchone()
     if not row:
         raise ValueError("Document introuvable.")
@@ -195,7 +299,7 @@ def document_summary(document_id: str) -> dict:
     with get_db() as conn:
         latest = conn.execute("SELECT * FROM analysis_jobs WHERE document_id = ? ORDER BY created_at DESC LIMIT 1",
                               (document_id,)).fetchone()
-        active = conn.execute("SELECT * FROM analysis_jobs WHERE document_id = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1",
+        active = conn.execute("SELECT * FROM analysis_jobs WHERE document_id = ? AND status IN ('queued', 'running', 'cancelling') ORDER BY created_at DESC LIMIT 1",
                               (document_id,)).fetchone()
         document["latest_job"] = row_to_dict(active or latest) if active or latest else None
         document["card_count"] = conn.execute("SELECT COUNT(*) FROM extracted_cards WHERE document_id = ?", (document_id,)).fetchone()[0]
@@ -340,6 +444,8 @@ def delete_document(document_id: str, *, confirmation: str, delete_knowledge: bo
         assert_document_idle(document_id)
         deleted_cards, deleted_nodes = [], []
         if delete_knowledge:
+            conn.execute("DELETE FROM review_mentions WHERE document_id = ?", (document_id,))
+            conn.execute("DELETE FROM review_runs WHERE document_id = ?", (document_id,))
             candidates = [node for node in graph_service.list_nodes()
                           if document_id in node["source_ids"] and set(node["source_ids"]) == {document_id}]
             card_ids = [row[0] for row in conn.execute("SELECT id FROM extracted_cards WHERE document_id = ?", (document_id,))]
@@ -347,6 +453,8 @@ def delete_document(document_id: str, *, confirmation: str, delete_knowledge: bo
                 card_service.delete_card(card_id)
                 deleted_cards.append(card_id)
             for node in candidates:
+                if conn.execute("SELECT 1 FROM review_mentions WHERE node_id=? AND document_id<>? AND status IN ('known','validated')", (node['id'],document_id)).fetchone():
+                    continue
                 if coherence_service.concept_users(node["id"]):
                     continue
                 incident = [edge for edge in graph_service.list_edges() if node["id"] in (edge["source_node_id"], edge["target_node_id"])]

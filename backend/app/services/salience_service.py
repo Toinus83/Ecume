@@ -45,8 +45,7 @@ def preserve_source_checks(raw_cards, chunk: str, chunk_index: int, document_id:
     if not spans:
         return cards
     if not cards:
-        cards = [{"main_effect": {"label": "Passages du document a verifier", "description": "Des regles ou valeurs sources restent a verifier avant de produire la connaissance."},
-                  "business_category": "non_qualifie", "business_confidence": None}]
+        return []
     def evidence(card):
         main = card.get("main_effect") or {}
         return key(" ".join([str(main.get("description", "") if isinstance(main, dict) else main),

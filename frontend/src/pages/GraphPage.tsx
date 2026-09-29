@@ -110,7 +110,7 @@ export default function GraphPage({ refreshKey, onOpenCard }: Props) {
       {error && <p className="error">{error}</p>}
       {view === "graph" && query.trim() && <div className="graph-search-results" aria-live="polite">
         {searching ? <p>Recherche…</p> : results.length === 0 ? <p>Aucun concept validé trouvé.</p> : results.map(result => <article key={result.node.id}>
-          <div className="section-title"><h3>{result.node.label}</h3><span>{result.node.business_validation_status === "auto_validated" ? "Auto-validé" : "Validé"}</span></div>
+          <div className="section-title"><h3>{result.node.label}</h3><span>Validé</span></div>
           <p>{result.node.description}</p>
           <details><summary>{result.neighbors.length} relations directes</summary>
             {result.neighbors.map(({edge, node}) => <p key={edge.id}>{edge.source_node_id === result.node.id ? result.node.label : node.label} → {edge.relation_type} → {edge.target_node_id === result.node.id ? result.node.label : node.label}</p>)}

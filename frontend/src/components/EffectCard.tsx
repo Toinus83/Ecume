@@ -110,6 +110,24 @@ export const businessCategories: Array<{ value: BusinessCategory; label: string;
     tooltip: "Service fourni par une application."
   },
   {
+    value: "application_outil",
+    label: "application / outil numérique",
+    questionLabel: "une application ou un outil numérique",
+    tooltip: "Application ou logiciel identifiable utilisé pour réaliser une activité."
+  },
+  {
+    value: "lieu_environnement_physique",
+    label: "lieu / environnement physique",
+    questionLabel: "un lieu ou environnement physique",
+    tooltip: "Lieu, bâtiment, zone ou environnement physique dans lequel une activité se déroule."
+  },
+  {
+    value: "ressource_metier",
+    label: "ressource métier",
+    questionLabel: "une ressource métier",
+    tooltip: "Moyen ou actif contrôlé et mobilisé par une personne ou une organisation."
+  },
+  {
     value: "element_technique",
     label: "element technique",
     questionLabel: "un element technique",
@@ -353,7 +371,7 @@ export default function EffectCard({ card, allCards, onChanged, onOpenGraph }: P
           <h2>{card.main_effect.label}</h2>
         </div>
         <div className="pill-row">
-          {card.business_validation_status === "auto_validated" ? <span className="pill status-accepted" title="Proposition suffisamment fiable selon le mode choisi.">Auto-validée</span> : <StatusPill value={card.status} />}
+          {["accepted", "accepted_orphan"].includes(card.status) ? <span className="pill status-accepted">Validé</span> : <StatusPill value={card.status} />}
           <LevelPill value={card.level} />
         </div>
       </div>

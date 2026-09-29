@@ -186,7 +186,7 @@ def test_settings_defaults_explicit_reset_and_no_silent_migration():
 def test_analysis_policy_is_frozen_at_enqueue_and_retry_is_idempotent(monkeypatch):
     document = upload()
     received = []
-    async def fake_analyze(document_id, progress_callback, *, validation_policy, extraction_mode="sober"):
+    async def fake_analyze(document_id, progress_callback, *, cancel_check=None, validation_policy, extraction_mode="sober"):
         received.append(validation_policy)
         return {"cards": [], "warnings": []}
     monkeypatch.setattr(analysis, "analyze_document", fake_analyze)

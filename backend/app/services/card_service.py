@@ -45,6 +45,10 @@ def update_card(card_id: str, update: CardUpdate) -> dict:
     for field in ("business_validation_status", "validation_status", "archimate_mapping_status", "ontology_mapping_status", "archimate_mapping"):
         data.pop(field, None)
     status = "to_confirm" if changed else data.get("status", current["status"])
+    if status in coherence.VALID_STATUSES:
+        from app.services.review_service import diagnostic
+        if diagnostic(data.get('main_effect',current['main_effect'])['label']):
+            raise ValueError('Une alerte de lecture ne peut pas devenir un concept metier.')
     business = {"accepted": "validated_by_user", "accepted_orphan": "validated_by_user",
                 "rejected": "rejected", "to_confirm": "corrected_by_user" if changed else "to_review"}.get(status, "proposed")
     mapping = dict(current.get("archimate_mapping") or {})
@@ -118,6 +122,10 @@ def _node_for_content(card: dict, role: str, label: str, old_id: str | None, **f
 
 
 def _synchronize_graph(before: dict, card: dict) -> None:
+    if 'simple_fields' in card.get('extraction_details', {}):
+        from app.services.review_graph import synchronize
+        synchronize(before, card)
+        return
     old_ids = before.get("graph_node_ids") or {}
     effect = card["main_effect"]
     ids = {"effect": _node_for_content(card, "effect", effect["label"], old_ids.get("effect"),
@@ -189,7 +197,9 @@ def _sync_mapping_when_exclusive(card: dict) -> None:
 
 @atomic
 def accept_card(card_id: str, orphan: bool = False) -> dict:
-    require_card(card_id)
+    from app.services.review_service import diagnostic
+    if diagnostic(require_card(card_id)['main_effect']['label']):
+        raise ValueError('Une alerte de lecture ne peut pas devenir un concept metier.')
     return update_card(card_id, CardUpdate(status="accepted_orphan" if orphan else "accepted"))
 
 
@@ -218,6 +228,7 @@ def delete_card(card_id: str) -> dict:
         for table in ("card_relations", "card_concepts", "link_suggestions"):
             conn.execute(f"DELETE FROM {table} WHERE card_id = ?", (card_id,))
         conn.execute("DELETE FROM extracted_cards WHERE id = ?", (card_id,))
+        conn.execute("UPDATE review_mentions SET status='ignored',card_id='',updated_at=? WHERE card_id=?", (now_iso(),card_id))
         coherence.refresh_states(node_ids=_all_card_node_ids(card), edge_ids=edges)
         record_change(entity_type="card", entity_id=card_id, action="deleted", origin="user",
                       source_id=card["document_id"], details={"before": card})

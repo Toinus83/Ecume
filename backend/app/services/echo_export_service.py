@@ -196,6 +196,7 @@ def export_csv(repository_id: str):
     }
     files.update({
         'echo_recognized_existing.csv':(payload['recognized_existing_echo_elements'],['node_id','node_label','target_layer','target_uri','target_label','recognition','status','reason']),
+        'echo_document_mentions.csv':(payload.get('recognized_document_mentions',[]),['id','document_id','document_title','label','target','source_excerpt','status']),
         'echo_new_voc_terms.csv':(payload['proposed_voc_terms'],['node_id','label','definition','aliases','status','source_ids']),
         'echo_rules.csv':(payload['ecume_rules'],['id','label','description','rule_type','value','unit','condition','exception','source_document_id','source_excerpt','status','reason','confidence','salience_score','owl_candidates']),
         'echo_shacl_report.csv':(payload['shacl_checks'],['element_id','shape_uri','shape_label','path','status','severity','message','projection']),

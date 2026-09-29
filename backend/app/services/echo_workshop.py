@@ -125,6 +125,9 @@ def enrich(payload: dict, synchronize_candidates: bool = True) -> dict:
     for warning in [*warnings,*echo.get('warnings',[])]:
         payload['warnings'].append({'code':'echo_workshop','entity_id':repository['id'],'message':warning})
     payload['metadata']['version']='2.0'
+    from app.services.review_service import workspace
+    payload['recognized_document_mentions'] = [item for item in workspace()['items']
+        if item['status']=='known' and any(t.get('repository_id')==repository['id'] for t in [item.get('target') or {}, *item.get('candidates',[])])]
     payload.pop('_cards',None)
     return payload
 

@@ -52,6 +52,18 @@ BUSINESS_CATEGORIES: dict[str, dict[str, str]] = {
         "label": "service applicatif",
         "tooltip": "Service fourni par une application pour aider un metier ou un autre systeme.",
     },
+    "application_outil": {
+        "label": "application / outil numerique",
+        "tooltip": "Application ou logiciel identifiable utilise pour realiser une activite.",
+    },
+    "lieu_environnement_physique": {
+        "label": "lieu / environnement physique",
+        "tooltip": "Lieu, batiment, zone ou environnement physique dans lequel une activite se deroule.",
+    },
+    "ressource_metier": {
+        "label": "ressource metier",
+        "tooltip": "Moyen ou actif controle par une personne ou une organisation et mobilise pour agir.",
+    },
     "element_technique": {
         "label": "element technique",
         "tooltip": "Element technique utile au fonctionnement : infrastructure, noeud, fonction ou service technique.",
@@ -86,6 +98,9 @@ ARCHIMATE_BY_CATEGORY = {
     "role_tenu": ("Business", "Business Role", 0.72),
     "service_rendu": ("Business", "Business Service", 0.7),
     "service_applicatif": ("Application", "Application Service", 0.74),
+    "application_outil": ("Application", "Application Component", 0.72),
+    "lieu_environnement_physique": ("Physical", "Facility", 0.72),
+    "ressource_metier": ("Strategy", "Resource", 0.68),
     "element_technique": ("Technology", "Node", 0.62),
     "non_qualifie": ("Unknown", "Unknown", 0.3),
 }

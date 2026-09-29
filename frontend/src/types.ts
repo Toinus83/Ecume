@@ -1,4 +1,25 @@
 export type Level = "strategic" | "operational" | "tactical" | "operator" | "unknown";
+export interface ReviewTarget { id:string; label:string; kind:'ecume'|'echo'; description:string; aliases:string[]; score?:number; layer?:string; repository_name?:string; reason?:string; source?:string; }
+export interface QualificationChoice {
+  category:BusinessCategory; label:string; explanation:string; recommended:boolean; mapping:ArchimateMapping;
+}
+export interface ReviewItem {
+  id:string; document_id:string; card_id:string; node_id:string; label:string; description:string;
+  status:'new'|'known'|'review'|'validated'|'ignored'; source_excerpt:string; updated_at:string;
+  fields:Record<string,{text:string;source_excerpt:string;origin:string;target?:ReviewTarget;status?:string;candidates?:ReviewTarget[]}[]>;
+  document_title?:string;
+  category?:BusinessCategory;
+  archimate_mapping?:ArchimateMapping;
+  qualification_choices?:QualificationChoice[];
+  business_rules?:{label:string;value?:string;unit?:string;condition?:string;exception?:string;source_excerpt?:string}[];
+  issues:string[]; target:ReviewTarget|null; candidates:ReviewTarget[];
+}
+export interface ReviewReport {
+  id:string; document_id:string; text_read:boolean; concepts_found:number; new:number; known_ecume:number; known_echo:number;
+  review:number; message:string; analysis_problem:boolean; issues:{message:string;source_excerpt?:string;detail?:string;part?:number}[];
+  cancelled?:boolean; chunks_processed?:number; total_chunks?:number;
+}
+export interface ReviewWorkspace {items:ReviewItem[];reports:ReviewReport[];issues:{message:string;source_excerpt?:string;detail?:string}[];}
 export type Confidence = "low" | "medium" | "high";
 export type CardStatus = "proposed" | "accepted" | "accepted_orphan" | "linked" | "to_confirm" | "rejected";
 export type NodeType = "effect" | "object" | "action" | "condition" | "task" | "theme";
@@ -15,6 +36,9 @@ export type BusinessCategory =
   | "role_tenu"
   | "service_rendu"
   | "service_applicatif"
+  | "application_outil"
+  | "lieu_environnement_physique"
+  | "ressource_metier"
   | "element_technique"
   | "non_qualifie";
 export type BusinessValidationStatus =
@@ -55,6 +79,11 @@ export interface SourceDocument {
   card_count: number;
   card_counts: Record<"validated" | "auto_validated" | "to_review" | "rejected" | "pending" | "linked", number>;
   concept_counts: Record<"validated" | "auto_validated" | "to_review" | "rejected" | "pending", number>;
+  proposed_domain: string;
+  confirmed_domain: string;
+  secondary_domains: string[];
+  domain_status: "unconfirmed" | "confirmed" | "no_reference";
+  domain_evidence: {domain:string;source:string;terms:string[];score:number}[];
 }
 
 export type RetentionPolicy = "keep" | "purge_after_success";
@@ -194,6 +223,7 @@ export interface DashboardStats {
 }
 
 export interface LLMSettings {
+  llm_enabled: boolean;
   llm_provider: "ollama" | "api";
   ollama_base_url: string;
   ollama_model: string;
@@ -210,10 +240,59 @@ export interface LLMTestResult {
   available_models: string[];
 }
 
+export interface RDFSettings {
+  fuseki_enabled: boolean;
+  fuseki_base_url: string;
+  fuseki_dataset: string;
+  fuseki_query_endpoint: string;
+  fuseki_update_endpoint: string;
+  fuseki_write_mode: "disabled" | "candidates" | "candidates_validated";
+  graph_echo_owl: string;
+  graph_echo_voc: string;
+  graph_echo_shacl: string;
+  graph_ecume_candidates: string;
+  graph_ecume_validated: string;
+  graph_ecume_rejected: string;
+  graph_ecume_provenance: string;
+  graph_ecume_review: string;
+  echo_source: "unconfigured" | "local" | "fuseki" | "url";
+  echo_default_domain: string;
+  echo_owl_reference: string;
+  echo_voc_reference: string;
+  echo_shacl_reference: string;
+  echo_layer_status: Record<"owl" | "voc" | "shacl", string>;
+  ontocast_enabled: boolean;
+  ontocast_mode: "disabled" | "simulation" | "api";
+  ontocast_api_url: string;
+  ontocast_timeout: number;
+  ontocast_extraction_profile: string;
+  ontocast_use_fuseki: boolean;
+  ontocast_local_fallback: boolean;
+  ontosphere_enabled: boolean;
+  ontosphere_url: string;
+  ontosphere_sparql_url: string;
+  ontosphere_review_graph: string;
+  rdf_auth_type: "none" | "basic" | "bearer" | "other";
+  rdf_auth_username: string;
+  rdf_auth_secret: string;
+  has_rdf_auth_secret: boolean;
+  clear_rdf_auth_secret?: boolean;
+  rdf_read_only: boolean;
+  rdf_write_candidates_only: boolean;
+  rdf_write_validated: boolean;
+}
+
+export interface RDFTestResult {
+  ok: boolean;
+  message: string;
+  data?: unknown;
+  layers?: Record<string, string>;
+}
+
 export interface AnalysisJob {
   id: string;
   document_id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "cancelling" | "cancelled" | "completed" | "failed";
   progress: number;
   step: string;
   message: string;

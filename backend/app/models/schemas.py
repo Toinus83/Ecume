@@ -22,6 +22,9 @@ BusinessCategory = Literal[
     "role_tenu",
     "service_rendu",
     "service_applicatif",
+    "application_outil",
+    "lieu_environnement_physique",
+    "ressource_metier",
     "element_technique",
     "non_qualifie",
 ]
@@ -69,6 +72,12 @@ class SourceDocument(BaseModel):
 
 class ImportSettings(BaseModel):
     retention_policy: Literal["keep", "purge_after_success"] = "keep"
+
+
+class DocumentDomainDecision(BaseModel):
+    confirmed_domain: str = Field(default="", max_length=160)
+    secondary_domains: list[str] = Field(default_factory=list, max_length=8)
+    no_suitable_reference: bool = False
 
 
 class ValidationSettings(BaseModel):
@@ -268,6 +277,7 @@ class AliasRequest(BaseModel):
 
 
 class LLMSettings(BaseModel):
+    llm_enabled: bool = True
     llm_provider: Literal["ollama", "api"] = "ollama"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1"
@@ -275,6 +285,46 @@ class LLMSettings(BaseModel):
     external_llm_base_url: str = ""
     external_llm_model: str = ""
     allow_llm_fallback: bool = False
+
+
+class RDFSettings(BaseModel):
+    fuseki_enabled: bool = False
+    fuseki_base_url: str = "http://localhost:3030"
+    fuseki_dataset: str = "ecume"
+    fuseki_query_endpoint: str = "/query"
+    fuseki_update_endpoint: str = "/update"
+    fuseki_write_mode: Literal["disabled", "candidates", "candidates_validated"] = "disabled"
+    graph_echo_owl: str = "graph:echo:reference:owl"
+    graph_echo_voc: str = "graph:echo:reference:voc"
+    graph_echo_shacl: str = "graph:echo:reference:shacl"
+    graph_ecume_candidates: str = "graph:ecume:candidates"
+    graph_ecume_validated: str = "graph:ecume:validated"
+    graph_ecume_rejected: str = "graph:ecume:rejected"
+    graph_ecume_provenance: str = "graph:ecume:provenance"
+    graph_ecume_review: str = "graph:ecume:review"
+    echo_source: Literal["unconfigured", "local", "fuseki", "url"] = "unconfigured"
+    echo_default_domain: str = "ECHO_RH"
+    echo_owl_reference: str = ""
+    echo_voc_reference: str = ""
+    echo_shacl_reference: str = ""
+    ontocast_enabled: bool = False
+    ontocast_mode: Literal["disabled", "simulation", "api"] = "disabled"
+    ontocast_api_url: str = ""
+    ontocast_timeout: int = Field(default=120, ge=1, le=3600)
+    ontocast_extraction_profile: str = "default"
+    ontocast_use_fuseki: bool = False
+    ontocast_local_fallback: bool = True
+    ontosphere_enabled: bool = False
+    ontosphere_url: str = ""
+    ontosphere_sparql_url: str = ""
+    ontosphere_review_graph: str = "graph:ecume:review"
+    rdf_auth_type: Literal["none", "basic", "bearer", "other"] = "none"
+    rdf_auth_username: str = ""
+    rdf_auth_secret: str = ""
+    clear_rdf_auth_secret: bool = False
+    rdf_read_only: bool = True
+    rdf_write_candidates_only: bool = True
+    rdf_write_validated: bool = False
 
 
 class ResetDatabaseRequest(BaseModel):

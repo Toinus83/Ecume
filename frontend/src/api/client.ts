@@ -1,4 +1,5 @@
 import type {
+  ReviewWorkspace, ReviewTarget,
   DashboardStats,
   AnalysisJob,
   ExtractedCard,
@@ -7,6 +8,8 @@ import type {
   KnowledgeNode,
   LLMSettings,
   LLMTestResult,
+  RDFSettings,
+  RDFTestResult,
   SourceDocument,
   RetentionPolicy,
   ValidationSettings,
@@ -17,7 +20,8 @@ import type {
   EchoMapping, EchoReport, EchoCardReport, BusinessRule
 } from "../types";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
+const runtimeApiUrl = window.__ECUME_CONFIG__?.apiBaseUrl?.trim();
+const API_BASE = (runtimeApiUrl || import.meta.env.VITE_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -32,6 +36,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  review: (documentId='') => request<ReviewWorkspace>(`/review?document_id=${encodeURIComponent(documentId)}`),
+  reviewTargets: (q:string) => request<ReviewTarget[]>(`/review/targets?q=${encodeURIComponent(q)}`),
+  decideMention: (id:string, payload:Record<string,unknown>) => request(`/review/${encodeURIComponent(id)}/decision`,{method:'POST',body:JSON.stringify(payload)}),
   baseUrl: API_BASE,
   echoReport: (id: string) => request<EchoReport>(`/references/${id}/report`),
   echoCard: (id: string) => request<EchoCardReport[]>(`/references/cards/${id}/workshop`),
@@ -73,16 +80,20 @@ export const api = {
   },
   deleteDocument: (id: string, payload: { confirmation: string; delete_knowledge: boolean; knowledge_confirmation: string }) =>
     request<{ deleted_cards: number; deleted_nodes: number }>(`/documents/${id}`, { method: "DELETE", body: JSON.stringify(payload) }),
-  uploadDocument: (file: File) => {
+  uploadDocument: (file: File, uploadId = "") => {
     const data = new FormData();
     data.append("file", file);
-    return request<SourceDocument>("/documents/upload", { method: "POST", body: data });
+    return request<SourceDocument>(`/documents/upload?upload_id=${encodeURIComponent(uploadId)}`, { method: "POST", body: data });
   },
-  analyzeDocument: (documentId: string, settings?: ValidationSettings, extractionMode = "sober") =>
-    request<AnalysisJob>(`/documents/${documentId}/analyze?extraction_mode=${encodeURIComponent(extractionMode)}`, { method: "POST", body: settings ? JSON.stringify(settings) : undefined }),
+  cancelImport: (uploadId:string) => request<{status:string}>(`/imports/${encodeURIComponent(uploadId)}/cancel`, {method:"POST"}),
+  confirmDomain: (id:string, payload:{confirmed_domain:string;secondary_domains:string[];no_suitable_reference:boolean}) =>
+    request<SourceDocument>(`/documents/${id}/domain`, {method:"PUT",body:JSON.stringify(payload)}),
+  analyzeDocument: (documentId: string, settings?: ValidationSettings, extractionMode = "sober", fillMode='prefilled') =>
+    request<AnalysisJob>(`/documents/${documentId}/analyze?extraction_mode=${encodeURIComponent(extractionMode)}&fill_mode=${encodeURIComponent(fillMode)}`, { method: "POST", body: settings ? JSON.stringify(settings) : undefined }),
   decideConcept: (cardId: string, proposalId: string, action: "retain" | "ignore") => request<ExtractedCard>(`/cards/${cardId}/concept-proposals/${proposalId}/${action}`, { method: "POST" }),
   job: (jobId: string) => request<AnalysisJob>(`/jobs/${jobId}`),
   jobs: () => request<AnalysisJob[]>("/jobs"),
+  cancelJob: (jobId: string) => request<AnalysisJob>(`/jobs/${jobId}/cancel`, { method: "POST" }),
   cards: () => request<ExtractedCard[]>("/cards"),
   deleteCard: (cardId: string) => request(`/cards/${cardId}`, { method: "DELETE" }),
   detachConcept: (cardId: string, nodeId: string) =>
@@ -127,11 +138,19 @@ export const api = {
   saveLlmSettings: (payload: LLMSettings) =>
     request<LLMSettings>("/admin/llm", { method: "PUT", body: JSON.stringify(payload) }),
   testLlmSettings: () => request<LLMTestResult>("/admin/llm/test", { method: "POST" }),
+  rdfSettings: () => request<RDFSettings>("/admin/rdf"),
+  saveRdfSettings: (payload: RDFSettings) =>
+    request<RDFSettings>("/admin/rdf", { method: "PUT", body: JSON.stringify(payload) }),
+  testRdfSettings: (action: "connection" | "query" | "graphs" | "read" | "write") =>
+    request<RDFTestResult>(`/admin/rdf/test/${action}`, { method: "POST" }),
+  checkEchoProfile: (check: "prefixes" | "concept-scheme" | "shapes" | "profile") =>
+    request<RDFTestResult>(`/admin/rdf/echo/check/${check}`, { method: "POST" }),
+  testOntocast: () => request<RDFTestResult>("/admin/rdf/ontocast/test", { method: "POST" }),
   resetDatabase: (payload: { confirmation: string; delete_uploads: boolean; delete_exports: boolean }) =>
     request<{ ok: boolean; message: string; deleted_uploads: number; deleted_exports: number }>(
       "/admin/database/reset",
       { method: "POST", body: JSON.stringify(payload) }
     ),
-  exportUrl: (kind: "json" | "jsonld" | "csv" | "memgraph" | "rdf-skos" | "archimate-json") =>
+  exportUrl: (kind: "json" | "jsonld" | "ttl" | "csv" | "memgraph" | "rdf-skos" | "archimate-json" | "ontology-draft") =>
     `${API_BASE}/export/${kind}`
 };

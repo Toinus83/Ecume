@@ -22,6 +22,8 @@ JSON_FIELDS = {
     "result_card_ids",
     "validation_decision",
     "extraction_details",
+    "secondary_domains",
+    "domain_evidence",
 }
 
 

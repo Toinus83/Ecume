@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, BookOpen, Download, FileUp, GitFork, Layers3, Network, Settings, Sparkles } from "lucide-react";
+import { BarChart3, BookOpen, CircleHelp, Download, FileUp, GitFork, Layers3, Network, Settings, Sparkles } from "lucide-react";
 import Dashboard from "./pages/Dashboard";
 import ImportPage from "./pages/ImportPage";
 import CardsPage from "./pages/CardsPage";
@@ -8,11 +8,13 @@ import OrphansPage from "./pages/OrphansPage";
 import ExportPage from "./pages/ExportPage";
 import AdminPage from "./pages/AdminPage";
 import ReferencesPage from "./pages/ReferencesPage";
+import HelpPage from "./pages/HelpPage";
 import type { SourceDocument } from "./types";
 import { useAnalysisJobs } from "./hooks/useAnalysisJobs";
 import { ActionError } from "./components/ContextHelp";
+import HelpCenter from "./components/HelpCenter";
 
-type Page = "dashboard" | "import" | "cards" | "graph" | "orphans" | "exports" | "references" | "admin";
+type Page = "dashboard" | "import" | "cards" | "graph" | "orphans" | "exports" | "references" | "admin" | "help";
 
 const nav = [
   { id: "dashboard", label: "Tableau", icon: BarChart3 },
@@ -22,20 +24,21 @@ const nav = [
   { id: "orphans", label: "Orphelins", icon: GitFork },
   { id: "exports", label: "Exports", icon: Download },
   { id: "references", label: "Referentiels", icon: BookOpen },
-  { id: "admin", label: "Admin", icon: Settings }
+  { id: "admin", label: "Admin", icon: Settings },
+  { id: "help", label: "Aide", icon: CircleHelp }
 ] as const;
 
 export default function App() {
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage] = useState<Page>("import");
   const [refreshKey, setRefreshKey] = useState(0);
   const { jobs, error: jobsError } = useAnalysisJobs(refreshKey);
-  const runningJob = jobs.find(job => job.status === "running" || job.status === "queued") ?? null;
+  const runningJob = jobs.find(job => ["running", "queued", "cancelling"].includes(job.status)) ?? null;
   const latestJob = runningJob ?? jobs[0];
   const [documentFilter, setDocumentFilter] = useState<SourceDocument | null>(null);
   const [cardFilter, setCardFilter] = useState<string | null>(null);
   const terminalJobs = useRef("");
   useEffect(() => {
-    const signature = jobs.filter(job => job.status === "completed" || job.status === "failed").map(job => `${job.id}:${job.status}`).sort().join("|");
+    const signature = jobs.filter(job => ["completed", "failed", "cancelled"].includes(job.status)).map(job => `${job.id}:${job.status}`).sort().join("|");
     if (signature !== terminalJobs.current) {
       terminalJobs.current = signature;
       setRefreshKey(value => value + 1);
@@ -79,7 +82,7 @@ export default function App() {
           </div>
         </div>
         <nav className="nav-list">
-          {nav.map((item) => {
+          {nav.filter(item => !["dashboard","orphans"].includes(item.id)).map((item) => {
             const Icon = item.icon;
             return (
               <button
@@ -93,6 +96,7 @@ export default function App() {
               </button>
             );
           })}
+          <details><summary>Outils avancés</summary>{nav.filter(item => ["dashboard","orphans"].includes(item.id)).map(item => <button key={item.id} className={page===item.id?"active":""} onClick={()=>navigate(item.id)}><item.icon size={18}/>{item.label}</button>)}</details>
         </nav>
       </aside>
 
@@ -104,13 +108,13 @@ export default function App() {
             {jobsError ? <ActionError error={jobsError} /> : runningJob ? (
               <div className="top-job">
                 <span style={{ width: `${Math.max(0, Math.min(100, runningJob.progress))}%` }} />
-                <p>Analyse {runningJob.status === "queued" ? "en attente" : "en cours"} · {runningJob.progress} %</p>
+                <p>Analyse {runningJob.status === "queued" ? "en attente" : runningJob.status === "cancelling" ? "en cours d’arrêt" : "en cours"} · {runningJob.progress} %</p>
               </div>
             ) : latestJob && <p className={latestJob.status === "failed" ? "error" : "quiet-note"} role="status">
-              {latestJob.status === "completed" ? "Dernière analyse terminée · 100 %" : "Dernière analyse interrompue. Consulte le document dans Import."}
+              {latestJob.status === "completed" ? "Dernière analyse terminée · 100 %" : latestJob.status === "cancelled" ? "Dernière analyse arrêtée. Les résultats partiels sont disponibles." : "Dernière analyse interrompue. Consulte le document dans Import."}
             </p>}
           </div>
-          <button className="ghost-button" onClick={refresh}>Actualiser</button>
+          <div className="topbar-actions"><HelpCenter page={page}/><button className="ghost-button" onClick={refresh}>Actualiser</button></div>
         </header>
 
         {page === "dashboard" && <Dashboard refreshKey={refreshKey} />}
@@ -121,6 +125,7 @@ export default function App() {
         {page === "exports" && <ExportPage />}
         {page === "references" && <ReferencesPage />}
         {page === "admin" && <AdminPage refreshKey={refreshKey} onChanged={refresh} />}
+        {page === "help" && <HelpPage />}
       </main>
     </div>
   );

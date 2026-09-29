@@ -1,10 +1,9 @@
-import { FileUp, RotateCw, Wand2 } from "lucide-react";
+import { FileUp, RotateCw, Square, Wand2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import DocumentLibrary from "../components/DocumentLibrary";
-import ValidationControls from "../components/ValidationControls";
 import { ContextHelp, ActionError } from "../components/ContextHelp";
-import type { AnalysisJob, RetentionPolicy, SourceDocument, ValidationSettings, ExtractionMode } from "../types";
+import type { AnalysisJob, RetentionPolicy, SourceDocument, ExtractionMode } from "../types";
 
 interface Props {
   onAnalyzed: () => void;
@@ -21,9 +20,12 @@ export default function ImportPage({ onAnalyzed, refreshKey, jobs, onOpenCards }
   const [error, setError] = useState("");
   const [retention, setRetention] = useState<RetentionPolicy>("keep");
   const [settingsReady, setSettingsReady] = useState(false);
-  const [validation, setValidation] = useState<ValidationSettings | null>(null);
+  const [fillMode, setFillMode] = useState("prefilled");
   const [extractionMode, setExtractionMode] = useState<ExtractionMode>("sober");
   const [manualOpen, setManualOpen] = useState(false);
+  const [importing,setImporting]=useState(false);
+  const [importStopping,setImportStopping]=useState(false);
+  const [importNotice,setImportNotice]=useState("");
   const [manual, setManual] = useState({
     theme_label: "",
     label: "",
@@ -35,6 +37,8 @@ export default function ImportPage({ onAnalyzed, refreshKey, jobs, onOpenCards }
   });
 
   const lastStarted = useRef<AnalysisJob | null>(null);
+  const activeImport=useRef("");
+  const stopRequested=useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,34 +62,56 @@ export default function ImportPage({ onAnalyzed, refreshKey, jobs, onOpenCards }
   }
 
   async function uploadAndAnalyze() {
-    if (!file || !validation) return;
+    if (!file) return;
     setBusy(true);
+    setImporting(true);setImportStopping(false);setImportNotice("");stopRequested.current=false;
+    const uploadId=crypto.randomUUID();activeImport.current=uploadId;
     setError("");
     try {
-      const uploaded = await api.uploadDocument(file);
+      const uploaded = await api.uploadDocument(file,uploadId);
+      setImporting(false);activeImport.current="";
       setDocument(uploaded);
-      const startedJob = await api.analyzeDocument(uploaded.id, validation, extractionMode);
+      const startedJob = await api.analyzeDocument(uploaded.id, undefined, extractionMode, fillMode);
       analysisStarted(uploaded, startedJob);
       setBusy(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Import impossible");
-      setManualOpen(true);
+      if(stopRequested.current){setImportNotice("Import arrêté. Aucun document incomplet n’a été ajouté.");}
+      else {setError(err instanceof Error ? err.message : "Import impossible");setManualOpen(true);}
       setBusy(false);
+    } finally {
+      setImporting(false);setImportStopping(false);activeImport.current="";
     }
   }
 
+  async function stopImport(){
+    if(!activeImport.current||importStopping)return;
+    stopRequested.current=true;setImportStopping(true);setImportNotice("Arrêt demandé. ECUME termine l’étape en cours puis s’arrête proprement.");
+    try{await api.cancelImport(activeImport.current);}catch(err){setError(err instanceof Error?err.message:"Arrêt impossible");setImportStopping(false);}
+  }
+
   async function retryAnalyze() {
-    if (!document || !validation) return;
+    if (!document) return;
     setBusy(true);
     setError("");
     try {
-      const startedJob = await api.analyzeDocument(document.id, validation, extractionMode);
+      const startedJob = await api.analyzeDocument(document.id, undefined, extractionMode, fillMode);
       analysisStarted(document, startedJob);
       setBusy(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analyse impossible");
       setBusy(false);
     }
+  }
+
+  async function stopAnalysis() {
+    if (!job || !["queued", "running"].includes(job.status)) return;
+    if (!window.confirm("Arrêter l’analyse ? ECUME terminera la partie en cours et conservera les premiers concepts détectés.")) return;
+    setBusy(true); setError("");
+    try {
+      const updated = await api.cancelJob(job.id);
+      setJob(updated); onAnalyzed();
+    } catch (err) { setError(err instanceof Error ? err.message : "Arrêt impossible"); }
+    finally { setBusy(false); }
   }
 
   function split(value: string) {
@@ -135,11 +161,10 @@ export default function ImportPage({ onAnalyzed, refreshKey, jobs, onOpenCards }
           <span>{file ? file.name : "Choisir un fichier .txt, .md, .pdf ou .docx"}</span>
           <input type="file" accept=".txt,.md,.pdf,.docx" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
         </label>
-        <ValidationControls onSettingsChange={setValidation} />
-        <label className="extraction-mode">Mode d’extraction<select value={extractionMode} disabled={busy} onChange={e => setExtractionMode(e.target.value as ExtractionMode)}>
-          <option value="sober">Sobre · les essentiels</option><option value="balanced">Équilibré · davantage de contexte</option><option value="exhaustive">Exhaustif · pour un examen approfondi</option>
+        <label className="extraction-mode" title="Large limite le bruit. Fine donne plus de détails et demande plus de relecture.">Granularité d’analyse<select value={extractionMode} disabled={busy} onChange={e => setExtractionMode(e.target.value as ExtractionMode)}>
+          <option value="sober">Large</option><option value="balanced">Moyenne</option><option value="exhaustive">Fine</option>
         </select></label>
-        <p className="quiet-note extraction-help">Plus l’extraction est exhaustive, plus il y aura de choses à vérifier. Pour commencer, privilégiez Sobre.</p>
+        <label className="extraction-mode" title="Le pré-remplissage accélère le travail. Tout reste corrigeable.">Remplissage<select value={fillMode} disabled={busy} onChange={e => setFillMode(e.target.value)}><option value="manual">Manuel</option><option value="prefilled">Pré-rempli</option></select></label>
         <details className="source-options"><summary>Conservation du fichier source</summary>        <label className="retention-field">Conservation des prochains imports
           <select value={retention} disabled={busy || !settingsReady} onChange={async e => {
             const policy = e.target.value as RetentionPolicy;
@@ -154,17 +179,21 @@ export default function ImportPage({ onAnalyzed, refreshKey, jobs, onOpenCards }
         </label>
 </details>
         <div className="button-row">
-          <button onClick={uploadAndAnalyze} disabled={!file || busy || !settingsReady || !validation}><Wand2 size={16} />Importer et analyser</button>
-          {job?.status === "failed" && <button className="ghost-button" onClick={retryAnalyze} disabled={!document || !validation || busy}><RotateCw size={16} />Réessayer l’analyse</button>}
+          <button onClick={uploadAndAnalyze} disabled={!file || busy || !settingsReady}><Wand2 size={16} />Importer et analyser</button>
+          {(job?.status === "failed" || job?.status === "cancelled") && <button className="ghost-button" onClick={retryAnalyze} disabled={!document || busy}><RotateCw size={16} />Reprendre par une nouvelle analyse</button>}
         </div>
       </div>
 
-      {busy && <div className="working"><span />ECUME prépare le traitement...</div>}
-      {job && (job.status === "running" || job.status === "queued") && (
+      {importing&&<div className="job-panel import-progress" role="status"><div className="section-title"><h2>Import et extraction en cours</h2><span>{importStopping?"arrêt demandé":"en cours"}</span></div>
+        <div className="indeterminate-progress"><span/></div><p>ECUME transfère le fichier puis extrait son texte.</p><p className="quiet-note">ECUME termine l’étape en cours puis s’arrête proprement.</p>
+        {!importStopping&&<button className="ghost-button stop-analysis" onClick={()=>void stopImport()}><Square size={15}/>Arrêter après l’étape en cours</button>}</div>}
+      {busy&&!importing&&!job&&<div className="working"><span />ECUME prépare le traitement...</div>}
+      {importNotice&&<p className="notice" role="status">{importNotice}</p>}
+      {job && ["running", "queued", "cancelling"].includes(job.status) && (
         <div className="job-panel">
           <div className="section-title">
             <h2>Analyse en cours</h2>
-            <span>en cours</span>
+            <span>{job.status === "cancelling" ? "arrêt demandé" : "en cours"}</span>
           </div>
           <div className="progress-bar" role="progressbar" aria-label="Progression de l’analyse" aria-valuemin={0} aria-valuemax={100} aria-valuenow={job.progress}>
             <span style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} />
@@ -174,12 +203,15 @@ export default function ImportPage({ onAnalyzed, refreshKey, jobs, onOpenCards }
             <small>Partie {job.current_chunk || 0} / {job.total_chunks} · {job.progress}%</small>
           )}
           <p className="quiet-note">Vous pouvez changer d’onglet : l’analyse continue tant qu’ECUME reste lancé.</p>
+          {job.status !== "cancelling" ? <button className="ghost-button stop-analysis" disabled={busy} onClick={() => void stopAnalysis()}><Square size={15}/>Arrêter après la partie en cours</button> :
+            <p className="quiet-note">ECUME attend la réponse de la partie en cours, puis sauvegardera les résultats déjà obtenus.</p>}
         </div>
       )}
-      {job?.status === "completed" && <p className="success" role="status">Analyse terminée. Les cartes sont disponibles dans la liste des documents.</p>}
+      {job?.status === "completed" && <p className="success" role="status">{job.message}</p>}
+      {job?.status === "cancelled" && <p className="notice" role="status">{job.message}</p>}
       <ActionError error={error} />
 
-      <DocumentLibrary refreshKey={refreshKey} validation={validation} extractionMode={extractionMode} onAnalyze={analysisStarted} onOpenCards={onOpenCards} onChanged={onAnalyzed} />
+      <DocumentLibrary refreshKey={refreshKey} fillMode={fillMode} extractionMode={extractionMode} onAnalyze={analysisStarted} onOpenCards={onOpenCards} onChanged={onAnalyzed} />
 
       {manualOpen && (
         <section className="panel">

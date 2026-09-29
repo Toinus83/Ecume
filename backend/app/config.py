@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Any
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -19,20 +20,60 @@ def _load_local_env(path: Path) -> None:
         os.environ[key] = value
 
 
-_load_local_env(PROJECT_DIR / ".env")
+def _bool_env(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).lower() in {"1", "true", "yes"}
 
-DATA_DIR = PROJECT_DIR / "data"
+
+def _update_local_env(values: dict[str, Any]) -> None:
+    """Update managed keys without deleting unrelated local configuration."""
+    existing_lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
+    replacements = {
+        key: str(value).replace("\r", "").replace("\n", "")
+        for key, value in values.items()
+    }
+    rendered: list[str] = []
+    seen: set[str] = set()
+    for line in existing_lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in line:
+            key = line.split("=", 1)[0].strip()
+            if key in replacements:
+                rendered.append(f"{key}={replacements[key]}")
+                seen.add(key)
+                continue
+        rendered.append(line)
+    if rendered and rendered[-1]:
+        rendered.append("")
+    rendered.extend(f"{key}={value}" for key, value in replacements.items() if key not in seen)
+    ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ENV_PATH.write_text("\n".join(rendered).rstrip() + "\n", encoding="utf-8")
+    if os.name != "nt":
+        ENV_PATH.chmod(0o600)
+    _load_local_env(ENV_PATH)
+
+
+ENV_PATH = Path(os.getenv("ECUME_ENV_PATH", str(PROJECT_DIR / ".env")))
+_load_local_env(ENV_PATH)
+
+DATA_DIR = Path(os.getenv("ECUME_DATA_DIR") or os.getenv("DATA_DIR") or str(PROJECT_DIR / "data"))
 UPLOAD_DIR = DATA_DIR / "uploads"
 EXPORT_DIR = DATA_DIR / "exports"
-DB_PATH = DATA_DIR / "ecume.db"
-ENV_PATH = PROJECT_DIR / ".env"
+_database_url = os.getenv("DATABASE_URL", "").strip()
+DB_PATH = (
+    Path(_database_url.removeprefix("sqlite:///"))
+    if _database_url.startswith("sqlite:///")
+    else Path(_database_url)
+    if _database_url
+    else DATA_DIR / "ecume.db"
+)
 
+LLM_ENABLED = _bool_env("LLM_ENABLED", True)
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", os.getenv("ECUME_LLM_PROVIDER", "ollama"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("ECUME_OLLAMA_BASE_URL", "http://localhost:11434"))
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", os.getenv("ECUME_OLLAMA_MODEL", "llama3.1"))
-EXTERNAL_LLM_API_KEY = os.getenv("EXTERNAL_LLM_API_KEY", "")
-EXTERNAL_LLM_BASE_URL = os.getenv("EXTERNAL_LLM_BASE_URL", "")
-EXTERNAL_LLM_MODEL = os.getenv("EXTERNAL_LLM_MODEL", "")
+EXTERNAL_LLM_API_KEY = os.getenv("EXTERNAL_LLM_API_KEY", os.getenv("LLM_API_KEY", ""))
+EXTERNAL_LLM_BASE_URL = os.getenv("EXTERNAL_LLM_BASE_URL", os.getenv("LLM_API_URL", ""))
+EXTERNAL_LLM_MODEL = os.getenv("EXTERNAL_LLM_MODEL", os.getenv("LLM_MODEL", ""))
 ALLOW_LLM_FALLBACK = os.getenv("ECUME_ALLOW_LLM_FALLBACK", "false").lower() in {
     "1",
     "true",
@@ -43,12 +84,13 @@ ALLOW_LLM_FALLBACK = os.getenv("ECUME_ALLOW_LLM_FALLBACK", "false").lower() in {
 def get_llm_config() -> dict[str, str | bool]:
     _load_local_env(ENV_PATH)
     return {
+        "llm_enabled": _bool_env("LLM_ENABLED", True),
         "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "llama3.1"),
-        "external_llm_api_key": os.getenv("EXTERNAL_LLM_API_KEY", ""),
-        "external_llm_base_url": os.getenv("EXTERNAL_LLM_BASE_URL", ""),
-        "external_llm_model": os.getenv("EXTERNAL_LLM_MODEL", ""),
+        "external_llm_api_key": os.getenv("EXTERNAL_LLM_API_KEY", os.getenv("LLM_API_KEY", "")),
+        "external_llm_base_url": os.getenv("EXTERNAL_LLM_BASE_URL", os.getenv("LLM_API_URL", "")),
+        "external_llm_model": os.getenv("EXTERNAL_LLM_MODEL", os.getenv("LLM_MODEL", "")),
         "allow_llm_fallback": os.getenv("ECUME_ALLOW_LLM_FALLBACK", "false").lower()
         in {"1", "true", "yes"},
     }
@@ -58,6 +100,7 @@ def save_llm_config(values: dict[str, str | bool]) -> dict[str, str | bool]:
     current = get_llm_config()
     current.update(values)
     env_values = {
+        "LLM_ENABLED": str(current["llm_enabled"]).lower(),
         "LLM_PROVIDER": current["llm_provider"],
         "OLLAMA_BASE_URL": current["ollama_base_url"],
         "OLLAMA_MODEL": current["ollama_model"],
@@ -66,9 +109,107 @@ def save_llm_config(values: dict[str, str | bool]) -> dict[str, str | bool]:
         "EXTERNAL_LLM_MODEL": current["external_llm_model"],
         "ECUME_ALLOW_LLM_FALLBACK": str(current["allow_llm_fallback"]).lower(),
     }
-    ENV_PATH.write_text(
-        "\n".join(f"{key}={value}" for key, value in env_values.items()) + "\n",
-        encoding="utf-8",
-    )
-    _load_local_env(ENV_PATH)
+    _update_local_env(env_values)
     return get_llm_config()
+
+
+RDF_DEFAULTS: dict[str, Any] = {
+    "fuseki_enabled": False,
+    "fuseki_base_url": "http://localhost:3030",
+    "fuseki_dataset": "ecume",
+    "fuseki_query_endpoint": "/query",
+    "fuseki_update_endpoint": "/update",
+    "fuseki_write_mode": "disabled",
+    "graph_echo_owl": "graph:echo:reference:owl",
+    "graph_echo_voc": "graph:echo:reference:voc",
+    "graph_echo_shacl": "graph:echo:reference:shacl",
+    "graph_ecume_candidates": "graph:ecume:candidates",
+    "graph_ecume_validated": "graph:ecume:validated",
+    "graph_ecume_rejected": "graph:ecume:rejected",
+    "graph_ecume_provenance": "graph:ecume:provenance",
+    "graph_ecume_review": "graph:ecume:review",
+    "echo_source": "unconfigured",
+    "echo_default_domain": "ECHO_RH",
+    "echo_owl_reference": "",
+    "echo_voc_reference": "",
+    "echo_shacl_reference": "",
+    "ontocast_enabled": False,
+    "ontocast_mode": "disabled",
+    "ontocast_api_url": "",
+    "ontocast_timeout": 120,
+    "ontocast_extraction_profile": "default",
+    "ontocast_use_fuseki": False,
+    "ontocast_local_fallback": True,
+    "ontosphere_enabled": False,
+    "ontosphere_url": "",
+    "ontosphere_sparql_url": "",
+    "ontosphere_review_graph": "graph:ecume:review",
+    "rdf_auth_type": "none",
+    "rdf_auth_username": "",
+    "rdf_auth_secret": "",
+    "rdf_read_only": True,
+    "rdf_write_candidates_only": True,
+    "rdf_write_validated": False,
+}
+
+
+RDF_ENV_KEYS = {key: f"ECUME_{key.upper()}" for key in RDF_DEFAULTS}
+RDF_ENV_ALIASES = {
+    "fuseki_enabled": "FUSEKI_ENABLED",
+    "fuseki_base_url": "FUSEKI_BASE_URL",
+    "fuseki_dataset": "FUSEKI_DATASET",
+    "fuseki_query_endpoint": "FUSEKI_QUERY_ENDPOINT",
+    "fuseki_update_endpoint": "FUSEKI_UPDATE_ENDPOINT",
+    "fuseki_write_mode": "FUSEKI_WRITE_MODE",
+    "graph_echo_owl": "FUSEKI_GRAPH_ECHO_OWL",
+    "graph_echo_voc": "FUSEKI_GRAPH_ECHO_VOC",
+    "graph_echo_shacl": "FUSEKI_GRAPH_ECHO_SHACL",
+    "graph_ecume_candidates": "FUSEKI_GRAPH_ECUME_CANDIDATES",
+    "graph_ecume_validated": "FUSEKI_GRAPH_ECUME_VALIDATED",
+    "graph_ecume_rejected": "FUSEKI_GRAPH_ECUME_REJECTED",
+    "graph_ecume_provenance": "FUSEKI_GRAPH_ECUME_PROVENANCE",
+    "graph_ecume_review": "FUSEKI_GRAPH_ECUME_REVIEW",
+    "ontocast_enabled": "ONTOCAST_ENABLED",
+    "ontocast_api_url": "ONTOCAST_API_URL",
+    "ontosphere_enabled": "ONTOSPHERE_ENABLED",
+    "ontosphere_url": "ONTOSPHERE_URL",
+}
+
+
+def get_rdf_config(*, include_secret: bool = True) -> dict[str, Any]:
+    _load_local_env(ENV_PATH)
+    result: dict[str, Any] = {}
+    for key, default in RDF_DEFAULTS.items():
+        raw = os.getenv(RDF_ENV_KEYS[key])
+        if raw is None and key in RDF_ENV_ALIASES:
+            raw = os.getenv(RDF_ENV_ALIASES[key])
+        if isinstance(default, bool):
+            result[key] = str(raw if raw is not None else default).lower() in {"1", "true", "yes"}
+        elif isinstance(default, int):
+            try:
+                result[key] = int(raw) if raw is not None else default
+            except ValueError:
+                result[key] = default
+        else:
+            result[key] = raw if raw is not None else default
+    if not include_secret:
+        result["has_rdf_auth_secret"] = bool(result["rdf_auth_secret"])
+        result["rdf_auth_secret"] = ""
+    return result
+
+
+def save_rdf_config(values: dict[str, Any]) -> dict[str, Any]:
+    current = get_rdf_config()
+    clear_secret = bool(values.pop("clear_rdf_auth_secret", False))
+    incoming_secret = str(values.get("rdf_auth_secret", ""))
+    current.update({key: value for key, value in values.items() if key in RDF_DEFAULTS})
+    if clear_secret:
+        current["rdf_auth_secret"] = ""
+    elif not incoming_secret:
+        current["rdf_auth_secret"] = get_rdf_config()["rdf_auth_secret"]
+    env_values = {
+        RDF_ENV_KEYS[key]: str(current[key]).lower() if isinstance(current[key], bool) else current[key]
+        for key in RDF_DEFAULTS
+    }
+    _update_local_env(env_values)
+    return get_rdf_config(include_secret=False)

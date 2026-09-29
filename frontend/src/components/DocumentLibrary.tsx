@@ -1,21 +1,21 @@
-import { BookOpen, Eraser, FileUp, RotateCw, Trash2, X } from "lucide-react";
+import { BookOpen, Eraser, FileUp, RotateCw, Square, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { ActionError, Hint } from "./ContextHelp";
-import type { AnalysisJob, RetentionPolicy, SourceDocument, ValidationSettings } from "../types";
+import type { AnalysisJob, RetentionPolicy, SourceDocument, ReviewReport } from "../types";
 
 interface Props {
-  validation: ValidationSettings | null;
+  fillMode: string;
   extractionMode: string;
   refreshKey: number;
   onAnalyze: (document: SourceDocument, job: AnalysisJob) => void;
   onOpenCards: (document: SourceDocument) => void;
   onChanged: () => void;
 }
-const states = { queued: "En attente", running: "En cours", completed: "Analyse terminée", failed: "Analyse interrompue ou échouée" };
+const states = { queued: "En attente", running: "En cours", cancelling: "Arrêt demandé", cancelled: "Analyse arrêtée, résultats partiels", completed: "Analyse terminée", failed: "Analyse interrompue ou échouée" };
 const sourceStates = { retained: "Source conservée", purged: "Source purgée", missing: "Source absente", purge_pending: "Purge à terminer" };
 
-export default function DocumentLibrary({ refreshKey, validation, extractionMode, onAnalyze, onOpenCards, onChanged }: Props) {
+export default function DocumentLibrary({ refreshKey, fillMode, extractionMode, onAnalyze, onOpenCards, onChanged }: Props) {
   const [documents, setDocuments] = useState<SourceDocument[]>([]);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -72,25 +72,29 @@ export default function DocumentLibrary({ refreshKey, validation, extractionMode
       {!filtered.length && <p>Aucun document.</p>}
       {filtered.map(doc => {
         const job = doc.latest_job;
-        const policy = job?.metadata?.validation_policy as ValidationSettings | undefined;
-        const active = job?.status === "running" || job?.status === "queued";
+        const report = job?.metadata?.review_report as ReviewReport | undefined;
+        const active = job ? ["running", "queued", "cancelling"].includes(job.status) : false;
         const disabled = busy !== null || active;
         return <article className="document-row" key={doc.id}>
           <div className="document-heading"><h3>{doc.filename}</h3><time>{new Date(doc.created_at).toLocaleString("fr-FR")}</time></div>
           <div className="document-facts">
             <span>{job ? states[job.status] : "Non analysé"}{active ? ` · ${job?.progress}%` : ""}</span>
             <span>{sourceStates[doc.source_status]} {doc.source_status === "purged" && <Hint label="Source purgée">Le fichier original n’est plus conservé. Les cartes et extraits utiles restent disponibles.</Hint>}</span>
-            <span>{policy ? `Mode de la dernière analyse : ${{ strict: "Strict", assisted: "Assisté", automatic: "Automatique" }[policy.mode]}` : "Mode historique non enregistré"}</span>
           </div>
-          <p className="document-counts">{doc.card_count} cartes · {doc.card_counts?.validated ?? 0} validées · {doc.card_counts?.auto_validated ?? 0} auto-validées · {doc.card_counts?.to_review ?? 0} à revoir · {doc.card_counts?.rejected ?? 0} rejetées</p>
+          <p className="document-counts">{report ? `${report.concepts_found} concepts repérés · ${report.new} nouveaux · ${report.known_ecume} connus dans ECUME · ${report.known_echo} dans Echo · ${report.review} à vérifier` : `${doc.card_count} cartes historiques`}</p>
+          {report&&<p className="document-domain"><strong>Domaine :</strong> {doc.confirmed_domain||doc.proposed_domain||"à préciser"} · {doc.domain_status==="confirmed"?"confirmé":"à confirmer"}</p>}
+          {report && <p className="quiet-note">{report.message}</p>}
+          <button className="ghost-button" onClick={() => onOpenCards(doc)}><BookOpen size={16} />Voir le bilan et les concepts</button>
+          {job && ["running", "queued"].includes(job.status) && <button className="ghost-button stop-analysis" disabled={busy === doc.id} onClick={() => {
+            if (window.confirm("Arrêter cette analyse ? ECUME terminera la partie en cours et conservera les premiers concepts détectés."))
+              void act(doc.id, () => api.cancelJob(job.id), "Arrêt demandé. Les résultats partiels seront conservés.");
+          }}><Square size={15}/>Arrêter l’analyse</button>}
           {job?.status === "failed" && <details className="document-error"><summary>Détail de l'interruption</summary><p className="error">{job.error || job.message}</p></details>}
           {!!job?.warnings.length && <details><summary>{job.warnings.length} points à vérifier</summary>{job.warnings.map((warning, index) => <p className="quiet-note" key={index}>{warning}</p>)}</details>}
           <details className="document-menu"><summary>Actions</summary><div className="document-actions">
             <p className="quiet-note">{doc.can_reanalyze ? "Analyse relançable. Les propositions existantes sont conservées." : "Fournissez à nouveau le fichier pour relancer l’analyse."}</p>
-            <button className="ghost-button" onClick={() => onOpenCards(doc)} disabled={!doc.card_count}><BookOpen size={16} />Ouvrir les cartes</button>
-            <button className="ghost-button" disabled={disabled || !doc.can_reanalyze || !validation} onClick={() => {
-              if (!validation) return;
-              void act(doc.id, async () => onAnalyze(doc, await api.analyzeDocument(doc.id, validation, extractionMode)), "Analyse lancée. Vous pouvez changer d’onglet.");
+            <button className="ghost-button" disabled={disabled || !doc.can_reanalyze} onClick={() => {
+              void act(doc.id, async () => onAnalyze(doc, await api.analyzeDocument(doc.id, undefined, extractionMode, fillMode)), "Analyse lancée. Vous pouvez changer d’onglet.");
             }}><RotateCw size={16} />Relancer</button>
             {!doc.source_available && doc.file_type !== "manual" && doc.source_status !== "purge_pending" && <label className={`source-upload ${disabled ? "disabled" : ""}`}>
               <FileUp size={16} />Fournir à nouveau le fichier

@@ -2,6 +2,7 @@ import { DatabaseZap, PlugZap, Save, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { KnowledgeNode, LLMSettings, LLMTestResult, NodeType } from "../types";
+import RdfEcosystemSettings from "../components/RdfEcosystemSettings";
 
 interface Props {
   refreshKey: number;
@@ -9,6 +10,7 @@ interface Props {
 }
 
 const emptySettings: LLMSettings = {
+  llm_enabled: true,
   llm_provider: "ollama",
   ollama_base_url: "http://localhost:11434",
   ollama_model: "llama3.1",
@@ -132,10 +134,18 @@ export default function AdminPage({ refreshKey, onChanged }: Props) {
       <section className="panel">
         <div className="section-title">
           <h2>Configuration LLM</h2>
-          <span>{settings.llm_provider === "ollama" ? "local" : "API"}</span>
+          <span>{!settings.llm_enabled ? "analyse locale simple" : settings.llm_provider === "ollama" ? "local" : "API"}</span>
         </div>
 
         <div className="admin-grid">
+          <label className="toggle-row full-row">
+            <input
+              type="checkbox"
+              checked={settings.llm_enabled}
+              onChange={(event) => setSettings({ ...settings, llm_enabled: event.target.checked })}
+            />
+            Utiliser un LLM pour préremplir l’analyse
+          </label>
           <label>
             Fournisseur
             <select
@@ -153,11 +163,18 @@ export default function AdminPage({ refreshKey, onChanged }: Props) {
             <input
               type="checkbox"
               checked={settings.allow_llm_fallback}
+              disabled={!settings.llm_enabled}
               onChange={(event) => setSettings({ ...settings, allow_llm_fallback: event.target.checked })}
             />
             Analyse heuristique si le LLM échoue
           </label>
         </div>
+
+        {!settings.llm_enabled && (
+          <p className="quiet-note">
+            Aucun service externe n’est appelé. ECUME extrait localement des propositions simples que l’utilisateur doit vérifier.
+          </p>
+        )}
 
         {settings.llm_provider === "ollama" ? (
           <div className="admin-grid">
@@ -215,6 +232,8 @@ export default function AdminPage({ refreshKey, onChanged }: Props) {
           </p>
         )}
       </section>
+
+      <RdfEcosystemSettings refreshKey={refreshKey} />
 
       <section className="panel danger-panel">
         <div className="section-title">

@@ -170,7 +170,7 @@ def test_purge_and_json_archive_preserve_rule_evidence():
 
 def test_extraction_mode_is_frozen_in_job_and_passed_to_analysis(monkeypatch):
     received = []
-    async def fake(document_id, progress_callback, *, validation_policy, extraction_mode):
+    async def fake(document_id, progress_callback, *, cancel_check=None, validation_policy, extraction_mode):
         received.append(extraction_mode)
         return {"cards": [], "warnings": []}
     monkeypatch.setattr(analysis, "analyze_document", fake)
@@ -267,10 +267,7 @@ def test_source_guard_does_not_store_full_document_or_invent_evidence():
 
 def test_source_guard_handles_empty_llm_response_without_losing_regulatory_passage():
     checked = salience.preserve_source_checks([], "Distance minimale 4 m.", 1)
-    assert len(checked) == 1
-    current = store(payload=checked[0], policy=ValidationSettings().model_dump())
-    assert current["extraction_details"]["source_checks"]
-    assert current["business_validation_status"] != "auto_validated"
+    assert checked == []  # Reading alerts now belong to the analysis report, never to a concept.
     assert not graph.graph_payload()["nodes"]
 
 
