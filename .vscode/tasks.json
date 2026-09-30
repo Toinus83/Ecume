@@ -1,0 +1,71 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ECUME: Installer les dependances backend",
+      "type": "shell",
+      "command": "python3 -m venv .venv && ./.venv/bin/python -m pip install -r requirements-dev.txt",
+      "windows": {
+        "command": "py -m venv .venv; if ($?) { .\\.venv\\Scripts\\python.exe -m pip install -r requirements-dev.txt }"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ECUME: Lancer le backend FastAPI",
+      "type": "shell",
+      "command": "./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
+      "windows": {
+        "command": ".\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ECUME: Lancer le frontend Vite",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ECUME: Tests backend",
+      "type": "shell",
+      "command": "./.venv/bin/python -m pytest tests -q",
+      "windows": {
+        "command": ".\\.venv\\Scripts\\python.exe -m pytest tests -q"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "ECUME: Typecheck frontend",
+      "type": "shell",
+      "command": "npm run typecheck",
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "ECUME: Build frontend",
+      "type": "shell",
+      "command": "npm run build",
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}

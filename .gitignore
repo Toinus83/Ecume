@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+backend/.venv/
 k8s/secret.local.yaml
 **/secret.local.yaml
 *.pem
@@ -16,6 +17,7 @@ __pycache__/
 
 # Données utilisateur et exports locaux
 data/
+data/runtime/
 data/uploads/
 data/exports/
 data/ecume.db
@@ -69,4 +71,4 @@ dist-offline/
 # Système / éditeurs
 .DS_Store
 Thumbs.db
-.vscode/
+.vscode/*.local.json

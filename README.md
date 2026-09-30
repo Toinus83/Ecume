@@ -40,6 +40,12 @@ sont desactives par defaut et aucun graphe Echo n'est modifie directement. Voir
 [guide de configuration](docs/configuration.md) decrit tous les modes sans exposer de
 secret dans le depot.
 
+## Developpement local sans Docker
+
+Si Docker n'est pas disponible, ECUME peut etre lance directement avec Python, Node.js,
+npm et VS Code. Le guide [developpeur local](docs/developer-setup.md) explique le clonage,
+l'installation, les taches VS Code, le debug FastAPI et les ports utilises.
+
 ## Conteneur et recette hors ligne
 
 Le [guide Docker et Kubernetes](docs/deployment.md) couvre le lancement avec deux
