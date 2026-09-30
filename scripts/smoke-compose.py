@@ -150,9 +150,34 @@ def exercise(base: str) -> tuple[str, str]:
             raise RuntimeError(f"Export vide ou indisponible : {path}")
 
     llm["ollama_model"] = "smoke-persistence-model"
+    llm["external_llm_api_key"] = "smoke-llm-secret"
     saved = json_request(base, "/api/admin/llm", method="PUT", payload=llm)
     if saved.get("ollama_model") != "smoke-persistence-model":
         raise RuntimeError("La configuration Admin n'a pas été enregistrée.")
+    if saved.get("external_llm_api_key") or not saved.get("has_external_llm_api_key"):
+        raise RuntimeError("La clé LLM n'est pas correctement masquée par l'API Admin.")
+
+    rdf.update({
+        "fuseki_base_url": "http://smoke-fuseki:3030",
+        "fuseki_dataset": "smoke-dataset",
+        "echo_source": "fuseki",
+        "echo_default_domain": "ECHO_SMOKE",
+        "echo_owl_reference": "graph:echo:smoke:owl",
+        "echo_voc_reference": "graph:echo:smoke:voc",
+        "echo_shacl_reference": "graph:echo:smoke:shacl",
+        "ontocast_api_url": "http://smoke-ontocast/health",
+        "ontocast_api_token": "smoke-ontocast-secret",
+        "ontosphere_enabled": True,
+        "ontosphere_url": "http://smoke-ontosphere",
+        "rdf_auth_type": "bearer",
+        "rdf_auth_secret": "smoke-rdf-secret",
+    })
+    rdf_saved = json_request(base, "/api/admin/rdf", method="PUT", payload=rdf)
+    for secret in ("rdf_auth_secret", "ontocast_api_token"):
+        if rdf_saved.get(secret):
+            raise RuntimeError(f"Le secret {secret} est renvoyé en clair par l'API Admin.")
+    if not rdf_saved.get("has_rdf_auth_secret") or not rdf_saved.get("has_ontocast_api_token"):
+        raise RuntimeError("Les indicateurs de secrets RDF ne sont pas cohérents.")
     return document["id"], accepted["node_id"]
 
 
@@ -160,12 +185,29 @@ def verify_persistence(base: str, document_id: str, node_id: str) -> None:
     documents = json_request(base, "/api/documents")
     graph = json_request(base, "/api/graph?scope=all")
     llm = json_request(base, "/api/admin/llm")
+    rdf = json_request(base, "/api/admin/rdf")
     if document_id not in {item["id"] for item in documents}:
         raise RuntimeError("Le document a disparu après recréation des conteneurs.")
     if node_id not in {item["id"] for item in graph["nodes"]}:
         raise RuntimeError("Le concept validé a disparu après recréation des conteneurs.")
     if llm.get("ollama_model") != "smoke-persistence-model":
         raise RuntimeError("La configuration Admin n'a pas persisté sur le volume.")
+    if llm.get("external_llm_api_key") or not llm.get("has_external_llm_api_key"):
+        raise RuntimeError("Le secret LLM n'est plus présent ou n'est plus masqué après redémarrage.")
+    expected_rdf = {
+        "fuseki_base_url": "http://smoke-fuseki:3030",
+        "fuseki_dataset": "smoke-dataset",
+        "echo_default_domain": "ECHO_SMOKE",
+        "ontocast_api_url": "http://smoke-ontocast/health",
+        "ontosphere_url": "http://smoke-ontosphere",
+    }
+    for key, expected in expected_rdf.items():
+        if rdf.get(key) != expected:
+            raise RuntimeError(f"La configuration {key} n'a pas persisté sur le volume.")
+    if rdf.get("rdf_auth_secret") or rdf.get("ontocast_api_token"):
+        raise RuntimeError("Un secret RDF est renvoyé en clair après redémarrage.")
+    if not rdf.get("has_rdf_auth_secret") or not rdf.get("has_ontocast_api_token"):
+        raise RuntimeError("Un secret RDF n'a pas persisté sur le volume.")
 
 
 def main() -> int:

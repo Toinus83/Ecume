@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app import config
 from app.llm.heuristic import HeuristicProvider
 from app.main import app
-from app.services import analysis_service, fuseki_service
+from app.services import admin_service, analysis_service, fuseki_service
 from test_mvp import isolated_data_dir
 
 
@@ -16,7 +16,14 @@ from test_mvp import isolated_data_dir
 def isolated_rdf_settings(monkeypatch: pytest.MonkeyPatch, tmp_path):
     env_path = tmp_path / ".env"
     monkeypatch.setattr(config, "ENV_PATH", env_path)
-    for env_name in config.RDF_ENV_KEYS.values():
+    managed_names = {
+        *config.RDF_ENV_KEYS.values(),
+        *config.RDF_ENV_ALIASES.values(),
+        "LLM_ENABLED", "LLM_PROVIDER", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
+        "EXTERNAL_LLM_API_KEY", "EXTERNAL_LLM_BASE_URL", "EXTERNAL_LLM_MODEL",
+        "LLM_API_KEY", "LLM_API_URL", "LLM_MODEL", "ECUME_ALLOW_LLM_FALLBACK",
+    }
+    for env_name in managed_names:
         monkeypatch.delenv(env_name, raising=False)
 
 
@@ -45,6 +52,106 @@ def test_rdf_admin_masks_secret_and_preserves_llm_configuration():
     config.save_llm_config({"ollama_model": "modele-test"})
     assert config.get_rdf_config()["rdf_auth_secret"] == "secret-never-returned"
     assert config.get_llm_config()["ollama_model"] == "modele-test"
+
+
+def test_llm_admin_never_returns_secret_and_blank_value_preserves_it():
+    with TestClient(app) as client:
+        payload = client.get("/admin/llm").json()
+        payload.update({
+            "llm_enabled": True,
+            "llm_provider": "api",
+            "external_llm_base_url": "http://llm.runtime/v1",
+            "external_llm_model": "runtime-model",
+            "external_llm_api_key": "llm-secret-never-returned",
+        })
+        saved = client.put("/admin/llm", json=payload).json()
+        assert saved["external_llm_api_key"] == ""
+        assert saved["has_external_llm_api_key"] is True
+        assert "llm-secret-never-returned" not in str(saved)
+
+        saved["external_llm_model"] = "runtime-model-2"
+        saved_again = client.put("/admin/llm", json=saved).json()
+        fetched = client.get("/admin/llm").json()
+
+    assert saved_again["external_llm_api_key"] == ""
+    assert fetched["external_llm_api_key"] == ""
+    assert config.get_llm_config()["external_llm_api_key"] == "llm-secret-never-returned"
+    assert config.get_llm_config()["external_llm_model"] == "runtime-model-2"
+
+
+def test_connection_tests_use_persisted_llm_and_ontocast_settings(monkeypatch: pytest.MonkeyPatch):
+    calls: list[dict] = []
+
+    class FakeResponse:
+        is_success = True
+        status_code = 200
+
+        def __init__(self, payload=None):
+            self.payload = payload or {"data": [{"id": "runtime-model"}]}
+            self.content = b"test-response"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            calls.append({"init": kwargs})
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, **kwargs):
+            calls.append({"url": url, **kwargs})
+            return FakeResponse()
+
+        async def post(self, url, **kwargs):
+            calls.append({"url": url, **kwargs})
+            return FakeResponse({
+                "results": {"bindings": [{"value": {"value": "1"}}]},
+            })
+
+    monkeypatch.setattr(admin_service.httpx, "AsyncClient", FakeAsyncClient)
+    config.save_llm_config({
+        "llm_enabled": True,
+        "llm_provider": "api",
+        "external_llm_base_url": "http://llm.runtime/v1",
+        "external_llm_model": "runtime-model",
+        "external_llm_api_key": "runtime-llm-token",
+    })
+    config.save_rdf_config({
+        "fuseki_enabled": True,
+        "fuseki_base_url": "http://fuseki.runtime:3030",
+        "fuseki_dataset": "runtime-dataset",
+        "rdf_auth_type": "bearer",
+        "rdf_auth_secret": "runtime-fuseki-token",
+        "ontocast_enabled": True,
+        "ontocast_mode": "api",
+        "ontocast_api_url": "http://ontocast.runtime/health",
+        "ontocast_api_token": "runtime-ontocast-token",
+    })
+
+    llm_result = asyncio.run(admin_service.test_llm_settings())
+    fuseki_result = asyncio.run(admin_service.test_rdf_settings("connection"))
+    ontocast_result = asyncio.run(admin_service.test_ontocast())
+
+    assert llm_result["ok"] is True
+    assert llm_result["available_models"] == ["runtime-model"]
+    assert fuseki_result["ok"] is True
+    assert ontocast_result["ok"] is True
+    assert {call["url"] for call in calls if "url" in call} == {
+        "http://llm.runtime/v1/models",
+        "http://fuseki.runtime:3030/runtime-dataset/query",
+        "http://ontocast.runtime/health",
+    }
+    assert any(call.get("headers", {}).get("Authorization") == "Bearer runtime-llm-token" for call in calls)
+    assert any(call.get("headers", {}).get("Authorization") == "Bearer runtime-fuseki-token" for call in calls)
+    assert any(call.get("headers", {}).get("Authorization") == "Bearer runtime-ontocast-token" for call in calls)
 
 
 def test_close_match_contract_contains_traceable_fields(monkeypatch: pytest.MonkeyPatch):

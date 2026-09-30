@@ -12,7 +12,8 @@ const defaults: RDFSettings = {
   graph_ecume_provenance: "graph:ecume:provenance", graph_ecume_review: "graph:ecume:review",
   echo_source: "unconfigured", echo_default_domain: "ECHO_RH", echo_owl_reference: "",
   echo_voc_reference: "", echo_shacl_reference: "", echo_layer_status: { owl: "non chargé", voc: "non chargé", shacl: "non chargé" },
-  ontocast_enabled: false, ontocast_mode: "disabled", ontocast_api_url: "", ontocast_timeout: 120,
+  ontocast_enabled: false, ontocast_mode: "disabled", ontocast_api_url: "", ontocast_api_token: "",
+  has_ontocast_api_token: false, ontocast_timeout: 120,
   ontocast_extraction_profile: "default", ontocast_use_fuseki: false, ontocast_local_fallback: true,
   ontosphere_enabled: false, ontosphere_url: "", ontosphere_sparql_url: "",
   ontosphere_review_graph: "graph:ecume:review", rdf_auth_type: "none", rdf_auth_username: "",
@@ -47,8 +48,13 @@ export default function RdfEcosystemSettings({ refreshKey }: { refreshKey: numbe
   }
 
   async function run(operation: () => Promise<RDFTestResult>) {
-    setBusy(true); setError(""); setResult(null);
-    try { setResult(await operation()); }
+    setBusy(true); setError(""); setMessage(""); setResult(null);
+    try {
+      const saved = await api.saveRdfSettings(settings);
+      setSettings(saved);
+      setMessage("Configuration enregistrée avant le test.");
+      setResult(await operation());
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Test impossible"); }
     finally { setBusy(false); }
   }
@@ -78,7 +84,7 @@ export default function RdfEcosystemSettings({ refreshKey }: { refreshKey: numbe
     </div></details>
 
     <details className="admin-subsection"><summary>OntoCast, extraction RDF</summary><div className="admin-subsection-body">
-      <label className="toggle-row"><input type="checkbox" checked={settings.ontocast_enabled} onChange={e=>setSettings({...settings,ontocast_enabled:e.target.checked})}/>Activer OntoCast</label><div className="admin-grid"><label>Mode<select value={settings.ontocast_mode} onChange={e=>setSettings({...settings,ontocast_mode:e.target.value as RDFSettings["ontocast_mode"]})}><option value="disabled">Désactivé</option><option value="simulation">Simulation</option><option value="api">API</option></select></label><label>URL API OntoCast<input value={settings.ontocast_api_url} onChange={e=>setSettings({...settings,ontocast_api_url:e.target.value})}/></label><label>Timeout (secondes)<input type="number" min={1} max={3600} value={settings.ontocast_timeout} onChange={e=>setSettings({...settings,ontocast_timeout:Number(e.target.value)})}/></label><label>Profil d’extraction<input value={settings.ontocast_extraction_profile} onChange={e=>setSettings({...settings,ontocast_extraction_profile:e.target.value})}/></label></div><label className="toggle-row"><input type="checkbox" checked={settings.ontocast_use_fuseki} onChange={e=>setSettings({...settings,ontocast_use_fuseki:e.target.checked})}/>Utiliser Fuseki comme référentiel</label><label className="toggle-row"><input type="checkbox" checked={settings.ontocast_local_fallback} onChange={e=>setSettings({...settings,ontocast_local_fallback:e.target.checked})}/>Utiliser le moteur local ECUME en fallback</label><div className="button-row"><button className="ghost-button" disabled={busy} onClick={()=>void run(api.testOntocast)}><PlugZap size={16}/>Tester la connexion</button><button className="ghost-button" onClick={()=>setResult({ok:true,message:"Fallback local prêt : ECUME continuera avec son moteur actuel."})}>Tester le fallback local</button></div><p className="quiet-note">L’envoi réel d’un document et l’affichage de la réponse brute seront ajoutés avec l’API OntoCast définitive.</p>
+      <label className="toggle-row"><input type="checkbox" checked={settings.ontocast_enabled} onChange={e=>setSettings({...settings,ontocast_enabled:e.target.checked})}/>Activer OntoCast</label><div className="admin-grid"><label>Mode<select value={settings.ontocast_mode} onChange={e=>setSettings({...settings,ontocast_mode:e.target.value as RDFSettings["ontocast_mode"]})}><option value="disabled">Désactivé</option><option value="simulation">Simulation</option><option value="api">API</option></select></label><label>URL API OntoCast<input value={settings.ontocast_api_url} onChange={e=>setSettings({...settings,ontocast_api_url:e.target.value})}/></label><label>Jeton API OntoCast<input type="password" autoComplete="new-password" placeholder={settings.has_ontocast_api_token ? "Jeton enregistré, saisir pour le remplacer" : "Non renseigné"} value={settings.ontocast_api_token} onChange={e=>setSettings({...settings,ontocast_api_token:e.target.value,clear_ontocast_api_token:false})}/></label><label>Timeout (secondes)<input type="number" min={1} max={3600} value={settings.ontocast_timeout} onChange={e=>setSettings({...settings,ontocast_timeout:Number(e.target.value)})}/></label><label>Profil d’extraction<input value={settings.ontocast_extraction_profile} onChange={e=>setSettings({...settings,ontocast_extraction_profile:e.target.value})}/></label></div>{settings.has_ontocast_api_token&&<label className="toggle-row"><input type="checkbox" checked={Boolean(settings.clear_ontocast_api_token)} onChange={e=>setSettings({...settings,clear_ontocast_api_token:e.target.checked})}/>Effacer le jeton OntoCast enregistré</label>}<label className="toggle-row"><input type="checkbox" checked={settings.ontocast_use_fuseki} onChange={e=>setSettings({...settings,ontocast_use_fuseki:e.target.checked})}/>Utiliser Fuseki comme référentiel</label><label className="toggle-row"><input type="checkbox" checked={settings.ontocast_local_fallback} onChange={e=>setSettings({...settings,ontocast_local_fallback:e.target.checked})}/>Utiliser le moteur local ECUME en fallback</label><div className="button-row"><button className="ghost-button" disabled={busy} onClick={()=>void run(api.testOntocast)}><PlugZap size={16}/>Tester la connexion</button><button className="ghost-button" onClick={()=>setResult({ok:true,message:"Fallback local prêt : ECUME continuera avec son moteur actuel."})}>Tester le fallback local</button></div><p className="quiet-note">L’envoi réel d’un document et l’affichage de la réponse brute seront ajoutés avec l’API OntoCast définitive.</p>
     </div></details>
 
     <details className="admin-subsection"><summary>Outil de revue RDF</summary><div className="admin-subsection-body">

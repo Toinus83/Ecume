@@ -228,6 +228,8 @@ export interface LLMSettings {
   ollama_base_url: string;
   ollama_model: string;
   external_llm_api_key: string;
+  has_external_llm_api_key: boolean;
+  clear_external_llm_api_key?: boolean;
   external_llm_base_url: string;
   external_llm_model: string;
   allow_llm_fallback: boolean;
@@ -264,6 +266,9 @@ export interface RDFSettings {
   ontocast_enabled: boolean;
   ontocast_mode: "disabled" | "simulation" | "api";
   ontocast_api_url: string;
+  ontocast_api_token: string;
+  has_ontocast_api_token: boolean;
+  clear_ontocast_api_token?: boolean;
   ontocast_timeout: number;
   ontocast_extraction_profile: string;
   ontocast_use_fuseki: boolean;

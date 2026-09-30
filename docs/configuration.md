@@ -96,3 +96,7 @@ Les valeurs initiales viennent de l'environnement. Les reglages enregistres dans
 sont conserves dans `/data/settings.env` et reutilises apres redemarrage. Ce fichier peut
 contenir une cle LLM ou des identifiants RDF : l'acces au volume `/data` doit donc etre
 protege.
+
+La recette reproductible [Admin et persistance runtime](admin-runtime-recipe.md) montre
+comment modifier les cinq integrations, redemarrer les conteneurs, verifier la persistance
+et tester les connexions LLM et Fuseki sans afficher les secrets.

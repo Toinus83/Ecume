@@ -15,6 +15,7 @@ const emptySettings: LLMSettings = {
   ollama_base_url: "http://localhost:11434",
   ollama_model: "llama3.1",
   external_llm_api_key: "",
+  has_external_llm_api_key: false,
   external_llm_base_url: "",
   external_llm_model: "",
   allow_llm_fallback: false
@@ -71,9 +72,13 @@ export default function AdminPage({ refreshKey, onChanged }: Props) {
   async function testSettings() {
     setBusy(true);
     setError("");
+    setMessage("");
     try {
+      const saved = await api.saveLlmSettings(settings);
+      setSettings(saved);
       const result = await api.testLlmSettings();
       setTestResult(result);
+      setMessage("Configuration enregistrée avant le test.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Test impossible");
     } finally {
@@ -215,10 +220,22 @@ export default function AdminPage({ refreshKey, onChanged }: Props) {
               Clé API
               <input
                 type="password"
+                autoComplete="new-password"
+                placeholder={settings.has_external_llm_api_key ? "Clé enregistrée, saisir pour la remplacer" : "Non renseignée"}
                 value={settings.external_llm_api_key}
-                onChange={(event) => setSettings({ ...settings, external_llm_api_key: event.target.value })}
+                onChange={(event) => setSettings({ ...settings, external_llm_api_key: event.target.value, clear_external_llm_api_key: false })}
               />
             </label>
+            {settings.has_external_llm_api_key && (
+              <label className="toggle-row full-row">
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.clear_external_llm_api_key)}
+                  onChange={(event) => setSettings({ ...settings, clear_external_llm_api_key: event.target.checked })}
+                />
+                Effacer la clé API enregistrée
+              </label>
+            )}
           </div>
         )}
 

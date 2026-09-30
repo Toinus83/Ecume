@@ -81,9 +81,9 @@ ALLOW_LLM_FALLBACK = os.getenv("ECUME_ALLOW_LLM_FALLBACK", "false").lower() in {
 }
 
 
-def get_llm_config() -> dict[str, str | bool]:
+def get_llm_config(*, include_secret: bool = True) -> dict[str, str | bool]:
     _load_local_env(ENV_PATH)
-    return {
+    result: dict[str, str | bool] = {
         "llm_enabled": _bool_env("LLM_ENABLED", True),
         "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
@@ -94,11 +94,23 @@ def get_llm_config() -> dict[str, str | bool]:
         "allow_llm_fallback": os.getenv("ECUME_ALLOW_LLM_FALLBACK", "false").lower()
         in {"1", "true", "yes"},
     }
+    if not include_secret:
+        result["has_external_llm_api_key"] = bool(result["external_llm_api_key"])
+        result["external_llm_api_key"] = ""
+    return result
 
 
 def save_llm_config(values: dict[str, str | bool]) -> dict[str, str | bool]:
     current = get_llm_config()
-    current.update(values)
+    incoming = dict(values)
+    clear_secret = bool(incoming.pop("clear_external_llm_api_key", False))
+    incoming.pop("has_external_llm_api_key", None)
+    incoming_secret = str(incoming.get("external_llm_api_key", ""))
+    current.update({key: value for key, value in incoming.items() if key in current})
+    if clear_secret:
+        current["external_llm_api_key"] = ""
+    elif not incoming_secret:
+        current["external_llm_api_key"] = get_llm_config()["external_llm_api_key"]
     env_values = {
         "LLM_ENABLED": str(current["llm_enabled"]).lower(),
         "LLM_PROVIDER": current["llm_provider"],
@@ -110,7 +122,7 @@ def save_llm_config(values: dict[str, str | bool]) -> dict[str, str | bool]:
         "ECUME_ALLOW_LLM_FALLBACK": str(current["allow_llm_fallback"]).lower(),
     }
     _update_local_env(env_values)
-    return get_llm_config()
+    return get_llm_config(include_secret=False)
 
 
 RDF_DEFAULTS: dict[str, Any] = {
@@ -136,6 +148,7 @@ RDF_DEFAULTS: dict[str, Any] = {
     "ontocast_enabled": False,
     "ontocast_mode": "disabled",
     "ontocast_api_url": "",
+    "ontocast_api_token": "",
     "ontocast_timeout": 120,
     "ontocast_extraction_profile": "default",
     "ontocast_use_fuseki": False,
@@ -171,6 +184,7 @@ RDF_ENV_ALIASES = {
     "graph_ecume_review": "FUSEKI_GRAPH_ECUME_REVIEW",
     "ontocast_enabled": "ONTOCAST_ENABLED",
     "ontocast_api_url": "ONTOCAST_API_URL",
+    "ontocast_api_token": "ONTOCAST_TOKEN",
     "ontosphere_enabled": "ONTOSPHERE_ENABLED",
     "ontosphere_url": "ONTOSPHERE_URL",
 }
@@ -195,18 +209,24 @@ def get_rdf_config(*, include_secret: bool = True) -> dict[str, Any]:
     if not include_secret:
         result["has_rdf_auth_secret"] = bool(result["rdf_auth_secret"])
         result["rdf_auth_secret"] = ""
+        result["has_ontocast_api_token"] = bool(result["ontocast_api_token"])
+        result["ontocast_api_token"] = ""
     return result
 
 
 def save_rdf_config(values: dict[str, Any]) -> dict[str, Any]:
     current = get_rdf_config()
-    clear_secret = bool(values.pop("clear_rdf_auth_secret", False))
-    incoming_secret = str(values.get("rdf_auth_secret", ""))
-    current.update({key: value for key, value in values.items() if key in RDF_DEFAULTS})
-    if clear_secret:
-        current["rdf_auth_secret"] = ""
-    elif not incoming_secret:
-        current["rdf_auth_secret"] = get_rdf_config()["rdf_auth_secret"]
+    incoming = dict(values)
+    for secret_name in ("rdf_auth_secret", "ontocast_api_token"):
+        clear_secret = bool(incoming.pop(f"clear_{secret_name}", False))
+        incoming.pop(f"has_{secret_name}", None)
+        incoming_secret = str(incoming.get(secret_name, ""))
+        if clear_secret:
+            current[secret_name] = ""
+        elif incoming_secret:
+            current[secret_name] = incoming_secret
+        incoming.pop(secret_name, None)
+    current.update({key: value for key, value in incoming.items() if key in RDF_DEFAULTS})
     env_values = {
         RDF_ENV_KEYS[key]: str(current[key]).lower() if isinstance(current[key], bool) else current[key]
         for key in RDF_DEFAULTS

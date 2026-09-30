@@ -70,26 +70,97 @@ def test_missing_frontend_fails_clearly(monkeypatch, tmp_path):
 
 
 def test_container_config_paths_and_admin_settings_survive_process_restart(tmp_path):
-    environment = dict(os.environ, ECUME_DATA_DIR=str(tmp_path / "data"),
-                       ECUME_ENV_PATH=str(tmp_path / "settings" / "settings.env"),
-                       PYTHONPATH=str(ROOT / "backend"), OLLAMA_MODEL="initial-test-model")
+    managed_names = {
+        *config.RDF_ENV_KEYS.values(), *config.RDF_ENV_ALIASES.values(),
+        "LLM_ENABLED", "LLM_PROVIDER", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
+        "EXTERNAL_LLM_API_KEY", "EXTERNAL_LLM_BASE_URL", "EXTERNAL_LLM_MODEL",
+        "LLM_API_KEY", "LLM_API_URL", "LLM_MODEL", "ECUME_ALLOW_LLM_FALLBACK",
+    }
+    environment = {key: value for key, value in os.environ.items() if key not in managed_names}
+    environment.update({
+        "ECUME_DATA_DIR": str(tmp_path / "data"),
+        "ECUME_ENV_PATH": str(tmp_path / "data" / "settings.env"),
+        "PYTHONPATH": str(ROOT / "backend"),
+        "LLM_ENABLED": "true",
+        "LLM_PROVIDER": "ollama",
+        "OLLAMA_MODEL": "initial-kubernetes-model",
+        "ECUME_FUSEKI_BASE_URL": "http://initial-fuseki:3030",
+        "ECUME_ECHO_DEFAULT_DOMAIN": "ECHO_INITIAL",
+        "ECUME_ONTOCAST_API_URL": "http://initial-ontocast",
+        "ECUME_ONTOSPHERE_URL": "http://initial-ontosphere",
+    })
     code = """
 import json
 from app import config
 from app.database.db import init_db
 init_db()
-config.save_llm_config({'ollama_model':'persisted-test-model', 'external_llm_api_key':''})
-print(json.dumps({'db':str(config.DB_PATH), 'env':str(config.ENV_PATH)}))
+initial = {'model': config.get_llm_config()['ollama_model'], 'fuseki': config.get_rdf_config()['fuseki_base_url']}
+config.save_llm_config({
+    'llm_enabled': True, 'llm_provider': 'api',
+    'external_llm_base_url': 'http://persisted-llm/v1',
+    'external_llm_model': 'persisted-model',
+    'external_llm_api_key': 'persisted-llm-secret'
+})
+config.save_rdf_config({
+    'fuseki_enabled': True, 'fuseki_base_url': 'http://persisted-fuseki:3030',
+    'fuseki_dataset': 'persisted-dataset', 'echo_source': 'fuseki',
+    'echo_default_domain': 'ECHO_METEO',
+    'echo_owl_reference': 'graph:echo:meteo:owl',
+    'echo_voc_reference': 'graph:echo:meteo:voc',
+    'echo_shacl_reference': 'graph:echo:meteo:shacl',
+    'ontocast_enabled': True, 'ontocast_mode': 'api',
+    'ontocast_api_url': 'http://persisted-ontocast/health',
+    'ontocast_api_token': 'persisted-ontocast-secret',
+    'ontosphere_enabled': True, 'ontosphere_url': 'http://persisted-ontosphere'
+})
+print(json.dumps({'db':str(config.DB_PATH), 'env':str(config.ENV_PATH), 'initial':initial}))
 """
     result = subprocess.run([sys.executable, "-c", code], env=environment, cwd=tmp_path,
                             check=True, text=True, capture_output=True)
     paths = json.loads(result.stdout)
     assert Path(paths["db"]) == tmp_path / "data" / "ecume.db"
-    assert Path(paths["env"]) == tmp_path / "settings" / "settings.env"
-    result = subprocess.run([sys.executable, "-c",
-        "from app.config import get_llm_config; print(get_llm_config()['ollama_model'])"],
+    assert Path(paths["env"]) == tmp_path / "data" / "settings.env"
+    assert paths["initial"] == {
+        "model": "initial-kubernetes-model",
+        "fuseki": "http://initial-fuseki:3030",
+    }
+    restart_code = """
+import json
+from app import config
+from app.services import analysis_service, fuseki_service
+llm = config.get_llm_config()
+rdf = config.get_rdf_config()
+provider = analysis_service._provider()
+print(json.dumps({
+    'llm_provider': llm['llm_provider'],
+    'llm_url': provider.base_url,
+    'llm_model': provider.model,
+    'llm_secret_loaded': provider.api_key == 'persisted-llm-secret',
+    'fuseki_url': fuseki_service._settings()['fuseki_base_url'],
+    'fuseki_dataset': rdf['fuseki_dataset'],
+    'echo_domain': rdf['echo_default_domain'],
+    'echo_layers': [rdf['echo_owl_reference'], rdf['echo_voc_reference'], rdf['echo_shacl_reference']],
+    'ontocast_url': rdf['ontocast_api_url'],
+    'ontocast_secret_loaded': rdf['ontocast_api_token'] == 'persisted-ontocast-secret',
+    'ontosphere_url': rdf['ontosphere_url'],
+}))
+"""
+    result = subprocess.run([sys.executable, "-c", restart_code],
         env=environment, cwd=tmp_path, check=True, text=True, capture_output=True)
-    assert result.stdout.strip() == "persisted-test-model"
+    restarted = json.loads(result.stdout)
+    assert restarted == {
+        "llm_provider": "api",
+        "llm_url": "http://persisted-llm/v1",
+        "llm_model": "persisted-model",
+        "llm_secret_loaded": True,
+        "fuseki_url": "http://persisted-fuseki:3030",
+        "fuseki_dataset": "persisted-dataset",
+        "echo_domain": "ECHO_METEO",
+        "echo_layers": ["graph:echo:meteo:owl", "graph:echo:meteo:voc", "graph:echo:meteo:shacl"],
+        "ontocast_url": "http://persisted-ontocast/health",
+        "ontocast_secret_loaded": True,
+        "ontosphere_url": "http://persisted-ontosphere",
+    }
 
 
 def packaging_module():

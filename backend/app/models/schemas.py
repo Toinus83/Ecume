@@ -282,6 +282,8 @@ class LLMSettings(BaseModel):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1"
     external_llm_api_key: str = ""
+    has_external_llm_api_key: bool = False
+    clear_external_llm_api_key: bool = False
     external_llm_base_url: str = ""
     external_llm_model: str = ""
     allow_llm_fallback: bool = False
@@ -310,6 +312,9 @@ class RDFSettings(BaseModel):
     ontocast_enabled: bool = False
     ontocast_mode: Literal["disabled", "simulation", "api"] = "disabled"
     ontocast_api_url: str = ""
+    ontocast_api_token: str = ""
+    has_ontocast_api_token: bool = False
+    clear_ontocast_api_token: bool = False
     ontocast_timeout: int = Field(default=120, ge=1, le=3600)
     ontocast_extraction_profile: str = "default"
     ontocast_use_fuseki: bool = False

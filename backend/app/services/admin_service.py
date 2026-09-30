@@ -9,7 +9,7 @@ from app.services import fuseki_service, reference_service
 
 
 def get_llm_settings() -> dict:
-    return config.get_llm_config()
+    return config.get_llm_config(include_secret=False)
 
 
 def update_llm_settings(settings: LLMSettings) -> dict:
@@ -51,12 +51,35 @@ async def test_llm_settings() -> dict:
             missing.append("clé API")
         if not settings["external_llm_model"]:
             missing.append("modèle")
-        return {
-            "ok": not missing,
-            "provider": "api",
-            "message": "Configuration API complète." if not missing else f"Champs manquants : {', '.join(missing)}",
-            "available_models": [],
-        }
+        if missing:
+            return {
+                "ok": False,
+                "provider": "api",
+                "message": f"Champs manquants : {', '.join(missing)}",
+                "available_models": [],
+            }
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.get(
+                    f"{str(settings['external_llm_base_url']).rstrip('/')}/models",
+                    headers={"Authorization": f"Bearer {settings['external_llm_api_key']}"},
+                )
+            response.raise_for_status()
+            models = response.json().get("data", []) if response.content else []
+            names = [str(model.get("id", "")) for model in models if isinstance(model, dict) and model.get("id")]
+            return {
+                "ok": True,
+                "provider": "api",
+                "message": "Connexion à l'API LLM réussie.",
+                "available_models": names,
+            }
+        except (httpx.HTTPError, ValueError) as exc:
+            return {
+                "ok": False,
+                "provider": "api",
+                "message": f"Connexion à l'API LLM impossible : {exc}",
+                "available_models": [],
+            }
     return {"ok": False, "provider": provider, "message": "Fournisseur inconnu.", "available_models": []}
 
 
@@ -136,8 +159,11 @@ async def test_ontocast() -> dict:
     if not settings["ontocast_api_url"]:
         return {"ok": False, "message": "URL OntoCast manquante. Le fallback local reste disponible."}
     try:
+        headers = {}
+        if settings["ontocast_api_token"]:
+            headers["Authorization"] = f"Bearer {settings['ontocast_api_token']}"
         async with httpx.AsyncClient(timeout=min(settings["ontocast_timeout"], 20)) as client:
-            response = await client.get(settings["ontocast_api_url"])
+            response = await client.get(settings["ontocast_api_url"], headers=headers)
         return {"ok": response.is_success, "message": f"OntoCast a répondu avec le statut HTTP {response.status_code}."}
     except httpx.HTTPError as exc:
         return {"ok": False, "message": f"OntoCast indisponible. Le fallback local reste disponible : {exc}"}
