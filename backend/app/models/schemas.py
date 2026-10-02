@@ -287,6 +287,9 @@ class LLMSettings(BaseModel):
     external_llm_base_url: str = ""
     external_llm_model: str = ""
     allow_llm_fallback: bool = False
+    llm_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    llm_json_mode: Literal["auto", "native", "prompt"] = "auto"
+    ollama_endpoint: Literal["auto", "generate", "chat"] = "auto"
 
 
 class RDFSettings(BaseModel):

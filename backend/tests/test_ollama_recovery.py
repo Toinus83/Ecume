@@ -13,17 +13,19 @@ from app.llm.ollama import OllamaProvider
 CUDA_ERROR = "llama-server process has terminated: CUDA error: the provided PTX was compiled with an unsupported toolchain."
 
 
-def test_cuda_failure_retries_on_cpu_and_keeps_mode_for_next_chunk(monkeypatch):
+def test_cuda_failure_retries_on_cpu_and_keeps_mode_for_next_chunk():
     requests = []
     def respond(request):
         requests.append(request)
         if len(requests) == 1:
             return httpx.Response(500, json={"error": CUDA_ERROR})
         return httpx.Response(200, json={"response": '{"cards": [], "warnings": []}'})
-    original_client = httpx.AsyncClient
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs))
     async def run():
-        provider = OllamaProvider(model="local-test-model", allow_cpu_fallback=True)
+        provider = OllamaProvider(
+            model="local-test-model",
+            allow_cpu_fallback=True,
+            transport=httpx.MockTransport(respond),
+        )
         first = await provider.analyze_document(title="", content_text="", existing_nodes=[])
         second = await provider.analyze_document(title="", content_text="", existing_nodes=[])
         assert first["warnings"] and second["warnings"]

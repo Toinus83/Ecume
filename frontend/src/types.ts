@@ -233,6 +233,9 @@ export interface LLMSettings {
   external_llm_base_url: string;
   external_llm_model: string;
   allow_llm_fallback: boolean;
+  llm_timeout_seconds: number;
+  llm_json_mode: "auto" | "native" | "prompt";
+  ollama_endpoint: "auto" | "generate" | "chat";
 }
 
 export interface LLMTestResult {

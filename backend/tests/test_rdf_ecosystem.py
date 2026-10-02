@@ -22,6 +22,7 @@ def isolated_rdf_settings(monkeypatch: pytest.MonkeyPatch, tmp_path):
         "LLM_ENABLED", "LLM_PROVIDER", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
         "EXTERNAL_LLM_API_KEY", "EXTERNAL_LLM_BASE_URL", "EXTERNAL_LLM_MODEL",
         "LLM_API_KEY", "LLM_API_URL", "LLM_MODEL", "ECUME_ALLOW_LLM_FALLBACK",
+        "LLM_TIMEOUT_SECONDS", "LLM_JSON_MODE", "OLLAMA_ENDPOINT",
     }
     for env_name in managed_names:
         monkeypatch.delenv(env_name, raising=False)
@@ -117,6 +118,17 @@ def test_connection_tests_use_persisted_llm_and_ontocast_settings(monkeypatch: p
             })
 
     monkeypatch.setattr(admin_service.httpx, "AsyncClient", FakeAsyncClient)
+
+    class FakeProvider:
+        async def list_models(self):
+            calls.append({"provider": "list_models"})
+            return ["runtime-model"]
+
+        async def functional_test(self):
+            calls.append({"provider": "functional_test"})
+            return {"ecume_test": "ok"}
+
+    monkeypatch.setattr(admin_service, "provider_from_settings", lambda _settings: FakeProvider())
     config.save_llm_config({
         "llm_enabled": True,
         "llm_provider": "api",
@@ -145,11 +157,10 @@ def test_connection_tests_use_persisted_llm_and_ontocast_settings(monkeypatch: p
     assert fuseki_result["ok"] is True
     assert ontocast_result["ok"] is True
     assert {call["url"] for call in calls if "url" in call} == {
-        "http://llm.runtime/v1/models",
         "http://fuseki.runtime:3030/runtime-dataset/query",
         "http://ontocast.runtime/health",
     }
-    assert any(call.get("headers", {}).get("Authorization") == "Bearer runtime-llm-token" for call in calls)
+    assert {call.get("provider") for call in calls if "provider" in call} == {"list_models", "functional_test"}
     assert any(call.get("headers", {}).get("Authorization") == "Bearer runtime-fuseki-token" for call in calls)
     assert any(call.get("headers", {}).get("Authorization") == "Bearer runtime-ontocast-token" for call in calls)
 

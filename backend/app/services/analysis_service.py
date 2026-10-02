@@ -6,9 +6,8 @@ from typing import Any, Callable
 
 from app.config import get_llm_config
 from app.database.db import atomic, get_db, now_iso, transaction
-from app.llm.api import ApiLLMProvider
 from app.llm.heuristic import HeuristicProvider
-from app.llm.ollama import OllamaProvider
+from app.llm.factory import provider_from_settings
 from app.models.schemas import KnowledgeEdgeIn, KnowledgeNodeIn, ManualCardRequest
 from app.semantic.archimate_mapping import normalize_archimate_mapping, normalize_business_category
 from app.services.changelog_service import record_change
@@ -178,24 +177,7 @@ async def analyze_document(document_id: str, progress_callback: ProgressCallback
 
 
 def _provider():
-    settings = get_llm_config()
-    if not settings["llm_enabled"]:
-        return HeuristicProvider()
-    if settings["llm_provider"] == "ollama":
-        return OllamaProvider(
-            base_url=str(settings["ollama_base_url"]),
-            model=str(settings["ollama_model"]),
-        )
-    if settings["llm_provider"] == "api":
-        base_url = str(settings["external_llm_base_url"]).rstrip("/")
-        if base_url and not base_url.endswith("/v1"):
-            base_url = f"{base_url}/v1"
-        return ApiLLMProvider(
-            base_url=base_url,
-            api_key=str(settings["external_llm_api_key"]),
-            model=str(settings["external_llm_model"]),
-        )
-    raise ValueError(f"Fournisseur LLM non supporté : {settings['llm_provider']}")
+    return provider_from_settings()
 
 
 def _chunk_text(text: str, max_chars: int = 7000, overlap: int = 500) -> list[str]:

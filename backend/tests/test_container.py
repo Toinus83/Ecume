@@ -75,6 +75,7 @@ def test_container_config_paths_and_admin_settings_survive_process_restart(tmp_p
         "LLM_ENABLED", "LLM_PROVIDER", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
         "EXTERNAL_LLM_API_KEY", "EXTERNAL_LLM_BASE_URL", "EXTERNAL_LLM_MODEL",
         "LLM_API_KEY", "LLM_API_URL", "LLM_MODEL", "ECUME_ALLOW_LLM_FALLBACK",
+        "LLM_TIMEOUT_SECONDS", "LLM_JSON_MODE", "OLLAMA_ENDPOINT",
     }
     environment = {key: value for key, value in os.environ.items() if key not in managed_names}
     environment.update({
@@ -99,7 +100,9 @@ config.save_llm_config({
     'llm_enabled': True, 'llm_provider': 'api',
     'external_llm_base_url': 'http://persisted-llm/v1',
     'external_llm_model': 'persisted-model',
-    'external_llm_api_key': 'persisted-llm-secret'
+    'external_llm_api_key': 'persisted-llm-secret',
+    'llm_timeout_seconds': 900, 'llm_json_mode': 'prompt',
+    'ollama_endpoint': 'chat'
 })
 config.save_rdf_config({
     'fuseki_enabled': True, 'fuseki_base_url': 'http://persisted-fuseki:3030',
@@ -136,6 +139,8 @@ print(json.dumps({
     'llm_url': provider.base_url,
     'llm_model': provider.model,
     'llm_secret_loaded': provider.api_key == 'persisted-llm-secret',
+    'llm_timeout': provider.timeout_seconds,
+    'llm_json_mode': provider.json_mode,
     'fuseki_url': fuseki_service._settings()['fuseki_base_url'],
     'fuseki_dataset': rdf['fuseki_dataset'],
     'echo_domain': rdf['echo_default_domain'],
@@ -153,6 +158,8 @@ print(json.dumps({
         "llm_url": "http://persisted-llm/v1",
         "llm_model": "persisted-model",
         "llm_secret_loaded": True,
+        "llm_timeout": 900,
+        "llm_json_mode": "prompt",
         "fuseki_url": "http://persisted-fuseki:3030",
         "fuseki_dataset": "persisted-dataset",
         "echo_domain": "ECHO_METEO",
@@ -250,6 +257,8 @@ def test_split_container_and_kubernetes_artifacts_are_present_and_safe():
     assert "ECUME_API_URL" in frontend
     assert "ecume-data:/data" in compose
     assert "LLM_ENABLED: ${LLM_ENABLED:-false}" in compose
+    assert "LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-600}" in compose
+    assert "LLM_JSON_MODE: ${LLM_JSON_MODE:-auto}" in compose
     assert "ECUME_FUSEKI_ENABLED: ${FUSEKI_ENABLED:-false}" in compose
 
 

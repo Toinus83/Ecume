@@ -24,6 +24,13 @@ def _bool_env(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).lower() in {"1", "true", "yes"}
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 def _update_local_env(values: dict[str, Any]) -> None:
     """Update managed keys without deleting unrelated local configuration."""
     existing_lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
@@ -79,11 +86,15 @@ ALLOW_LLM_FALLBACK = os.getenv("ECUME_ALLOW_LLM_FALLBACK", "false").lower() in {
     "true",
     "yes",
 }
+LLM_TIMEOUT_SECONDS = _int_env("LLM_TIMEOUT_SECONDS", 600)
+LLM_JSON_MODE = os.getenv("LLM_JSON_MODE", "auto")
+OLLAMA_ENDPOINT = os.getenv("OLLAMA_ENDPOINT", "auto")
 
 
-def get_llm_config(*, include_secret: bool = True) -> dict[str, str | bool]:
+def get_llm_config(*, include_secret: bool = True) -> dict[str, str | bool | int]:
     _load_local_env(ENV_PATH)
-    result: dict[str, str | bool] = {
+    timeout_seconds = _int_env("LLM_TIMEOUT_SECONDS", 600)
+    result: dict[str, str | bool | int] = {
         "llm_enabled": _bool_env("LLM_ENABLED", True),
         "llm_provider": os.getenv("LLM_PROVIDER", "ollama"),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
@@ -93,6 +104,9 @@ def get_llm_config(*, include_secret: bool = True) -> dict[str, str | bool]:
         "external_llm_model": os.getenv("EXTERNAL_LLM_MODEL", os.getenv("LLM_MODEL", "")),
         "allow_llm_fallback": os.getenv("ECUME_ALLOW_LLM_FALLBACK", "false").lower()
         in {"1", "true", "yes"},
+        "llm_timeout_seconds": max(30, min(timeout_seconds, 3600)),
+        "llm_json_mode": os.getenv("LLM_JSON_MODE", "auto"),
+        "ollama_endpoint": os.getenv("OLLAMA_ENDPOINT", "auto"),
     }
     if not include_secret:
         result["has_external_llm_api_key"] = bool(result["external_llm_api_key"])
@@ -100,7 +114,7 @@ def get_llm_config(*, include_secret: bool = True) -> dict[str, str | bool]:
     return result
 
 
-def save_llm_config(values: dict[str, str | bool]) -> dict[str, str | bool]:
+def save_llm_config(values: dict[str, str | bool | int]) -> dict[str, str | bool | int]:
     current = get_llm_config()
     incoming = dict(values)
     clear_secret = bool(incoming.pop("clear_external_llm_api_key", False))
@@ -120,6 +134,9 @@ def save_llm_config(values: dict[str, str | bool]) -> dict[str, str | bool]:
         "EXTERNAL_LLM_BASE_URL": current["external_llm_base_url"],
         "EXTERNAL_LLM_MODEL": current["external_llm_model"],
         "ECUME_ALLOW_LLM_FALLBACK": str(current["allow_llm_fallback"]).lower(),
+        "LLM_TIMEOUT_SECONDS": current["llm_timeout_seconds"],
+        "LLM_JSON_MODE": current["llm_json_mode"],
+        "OLLAMA_ENDPOINT": current["ollama_endpoint"],
     }
     _update_local_env(env_values)
     return get_llm_config(include_secret=False)

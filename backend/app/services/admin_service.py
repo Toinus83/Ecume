@@ -5,6 +5,8 @@ import httpx
 from app import config
 from app.database.db import get_db
 from app.models.schemas import LLMSettings, RDFSettings
+from app.llm.errors import LLMError
+from app.llm.factory import provider_from_settings
 from app.services import fuseki_service, reference_service
 
 
@@ -25,62 +27,25 @@ async def test_llm_settings() -> dict:
             "message": "LLM désactivé : ECUME utilise l'analyse locale simple.",
             "available_models": [],
         }
-    provider = settings["llm_provider"]
-    if provider == "ollama":
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(f"{settings['ollama_base_url']}/api/tags")
-            response.raise_for_status()
-            models = response.json().get("models", [])
-        names = [model.get("name") or model.get("model") for model in models]
-        configured = settings["ollama_model"]
+    provider_name = str(settings["llm_provider"])
+    models: list[str] = []
+    try:
+        provider = provider_from_settings(settings)
+        models = await provider.list_models()
+        await provider.functional_test()
         return {
-            "ok": configured in names,
-            "provider": "ollama",
-            "message": (
-                f"Modèle disponible : {configured}"
-                if configured in names
-                else f"Modèle configuré absent. Modèles disponibles : {', '.join(names) or 'aucun'}"
-            ),
-            "available_models": names,
+            "ok": True,
+            "provider": provider_name,
+            "message": "Connexion OK - modèle accessible - génération OK - JSON valide",
+            "available_models": models,
         }
-    if provider == "api":
-        missing = []
-        if not settings["external_llm_base_url"]:
-            missing.append("URL API")
-        if not settings["external_llm_api_key"]:
-            missing.append("clé API")
-        if not settings["external_llm_model"]:
-            missing.append("modèle")
-        if missing:
-            return {
-                "ok": False,
-                "provider": "api",
-                "message": f"Champs manquants : {', '.join(missing)}",
-                "available_models": [],
-            }
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                response = await client.get(
-                    f"{str(settings['external_llm_base_url']).rstrip('/')}/models",
-                    headers={"Authorization": f"Bearer {settings['external_llm_api_key']}"},
-                )
-            response.raise_for_status()
-            models = response.json().get("data", []) if response.content else []
-            names = [str(model.get("id", "")) for model in models if isinstance(model, dict) and model.get("id")]
-            return {
-                "ok": True,
-                "provider": "api",
-                "message": "Connexion à l'API LLM réussie.",
-                "available_models": names,
-            }
-        except (httpx.HTTPError, ValueError) as exc:
-            return {
-                "ok": False,
-                "provider": "api",
-                "message": f"Connexion à l'API LLM impossible : {exc}",
-                "available_models": [],
-            }
-    return {"ok": False, "provider": provider, "message": "Fournisseur inconnu.", "available_models": []}
+    except (LLMError, ValueError) as exc:
+        return {
+            "ok": False,
+            "provider": provider_name,
+            "message": str(exc),
+            "available_models": models,
+        }
 
 
 def _echo_layer_status() -> dict[str, str]:

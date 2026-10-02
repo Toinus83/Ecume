@@ -18,7 +18,10 @@ const emptySettings: LLMSettings = {
   has_external_llm_api_key: false,
   external_llm_base_url: "",
   external_llm_model: "",
-  allow_llm_fallback: false
+  allow_llm_fallback: false,
+  llm_timeout_seconds: 600,
+  llm_json_mode: "auto",
+  ollama_endpoint: "auto"
 };
 
 const nodeTypes: Array<NodeType | "all"> = ["all", "effect", "object", "action", "condition", "task", "theme"];
@@ -193,6 +196,7 @@ export default function AdminPage({ refreshKey, onChanged }: Props) {
             <label>
               Modèle Ollama
               <input
+                list="llm-models"
                 value={settings.ollama_model}
                 onChange={(event) => setSettings({ ...settings, ollama_model: event.target.value })}
               />
@@ -211,6 +215,7 @@ export default function AdminPage({ refreshKey, onChanged }: Props) {
             <label>
               Modèle API
               <input
+                list="llm-models"
                 placeholder="nom-du-modele"
                 value={settings.external_llm_model}
                 onChange={(event) => setSettings({ ...settings, external_llm_model: event.target.value })}
@@ -239,9 +244,56 @@ export default function AdminPage({ refreshKey, onChanged }: Props) {
           </div>
         )}
 
+        <datalist id="llm-models">
+          {(testResult?.available_models ?? []).map((model) => <option key={model} value={model} />)}
+        </datalist>
+
+        <details className="advanced-settings">
+          <summary>Réglages avancés</summary>
+          <div className="admin-grid">
+            <label>
+              Timeout de génération (secondes)
+              <input
+                type="number"
+                min={30}
+                max={3600}
+                value={settings.llm_timeout_seconds}
+                onChange={(event) => setSettings({ ...settings, llm_timeout_seconds: Number(event.target.value) })}
+              />
+            </label>
+            <label>
+              Récupération JSON
+              <select
+                value={settings.llm_json_mode}
+                onChange={(event) => setSettings({ ...settings, llm_json_mode: event.target.value as LLMSettings["llm_json_mode"] })}
+              >
+                <option value="auto">Automatique (recommandé)</option>
+                <option value="native">JSON natif uniquement</option>
+                <option value="prompt">Instruction dans le prompt</option>
+              </select>
+            </label>
+            {settings.llm_provider === "ollama" && (
+              <label>
+                API Ollama
+                <select
+                  value={settings.ollama_endpoint}
+                  onChange={(event) => setSettings({ ...settings, ollama_endpoint: event.target.value as LLMSettings["ollama_endpoint"] })}
+                >
+                  <option value="auto">Automatique (recommandé)</option>
+                  <option value="generate">Génération</option>
+                  <option value="chat">Conversation</option>
+                </select>
+              </label>
+            )}
+          </div>
+          <p className="quiet-note">
+            Le mode automatique essaie le JSON natif, puis utilise une instruction simple si le modèle ne le supporte pas.
+          </p>
+        </details>
+
         <div className="button-row">
           <button onClick={saveSettings} disabled={busy}><Save size={16} />Enregistrer</button>
-          <button className="ghost-button" onClick={testSettings} disabled={busy}><PlugZap size={16} />Tester</button>
+          <button className="ghost-button" onClick={testSettings} disabled={busy}><PlugZap size={16} />Tester le LLM</button>
         </div>
         {testResult && (
           <p className={testResult.ok ? "success inline-result" : "warning inline-result"}>

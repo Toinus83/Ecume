@@ -326,6 +326,12 @@ OLLAMA_MODEL=llama3.1
 ```
 
 ECUME essaie `/api/generate`, puis `/api/chat` si le premier endpoint n'est pas disponible.
+Dans **Admin > Configuration LLM**, **Tester le LLM** lance une vraie génération JSON
+courte : un test vert confirme donc la connexion, le modèle, la génération et le parsing.
+Le mode JSON automatique est compatible avec les modèles qui refusent `format=json` ou
+`response_format`. Le timeout est réglable (600 secondes par défaut) dans les réglages
+avancés. ECUME conserve toujours le nom de modèle choisi et ne bascule pas sur un autre
+modèle sans action de l'utilisateur.
 
 En cas d'erreur CUDA `PTX ... unsupported toolchain`, le passage automatique sur processeur est desactive par defaut.
 Sur Windows, le [script de lancement GPU Vulkan](scripts/start-ollama-gpu.ps1) permet d'utiliser le GPU via le moteur Vulkan fourni avec Ollama :

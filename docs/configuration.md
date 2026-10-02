@@ -37,6 +37,17 @@ LLM_MODEL=modele-interne
 ```
 
 Pour Ollama, utiliser `LLM_PROVIDER=ollama`, `OLLAMA_BASE_URL` et `OLLAMA_MODEL`.
+Le bouton **Tester le LLM** effectue une vraie génération courte et valide le JSON avec
+le même provider que l'analyse documentaire. Le mode `LLM_JSON_MODE=auto` essaie le
+format JSON natif puis retire uniquement ce paramètre si le serveur indique qu'il ne le
+supporte pas. `LLM_TIMEOUT_SECONDS=600` convient aux modèles locaux lents ; ces réglages
+sont disponibles dans la section avancée de l'Admin.
+
+Dans Docker, un Ollama lancé sur la machine hôte est joignable avec
+`OLLAMA_BASE_URL=http://host.docker.internal:11434`. Sous Linux, Compose déclare déjà
+la passerelle `host-gateway`. Pour une API OpenAI-compatible, renseigner son URL de base
+(avec ou sans `/v1`), le nom exact du modèle et, seulement si elle est requise, la clé API.
+ECUME utilise `/v1/chat/completions` et ne change jamais silencieusement de modèle.
 La valeur `changeme` est un placeholder, jamais une cle fonctionnelle. Ne placer aucun
 secret reel dans `.env.example`. En Kubernetes, renseigner `EXTERNAL_LLM_API_KEY` dans
 `secret.local.yaml` ou dans le gestionnaire de secrets de l'infrastructure.
